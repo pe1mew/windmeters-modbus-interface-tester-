@@ -42,6 +42,13 @@ transceiver, 9600 8N1), opposite conversational role.
 - mDNS (`*.local`)
 - NTP sync with manual fallback, POSIX TZ resolution from lat/lon
 - Web server: HTTP + WebSocket, ~1 s live push
+- **GUI assets ported as-is**: `firmware/data/index.html` + `style.css` +
+  `app.js` — vanilla HTML/CSS/JS, no framework or CDN dependency (confirmed
+  by reading the actual files, not just the repo tree). The template is one
+  scrollable page with a `<section>` per feature, not separate routed
+  pages — that structure carries over directly (§7), including `app.js`'s
+  `post(url, body)` / `setText()` / `setBadge()` helpers and its
+  `type`-keyed WebSocket message router.
 - NVS persistence layer and pattern
 - RGB LED status feedback (idle/activity/error colour convention) — ported
   directly; confirmed working on this hardware at GPIO35 (WS2812B, see §4.1)
@@ -59,7 +66,9 @@ transceiver, 9600 8N1), opposite conversational role.
   modes are dropped rather than ported.
 - "Sensor Configuration" page → **Bus Scanner** + **Wind Test** pages (§7)
 
-**New:**
+**New** (as new `<section>` blocks inside the ported `index.html`, styled
+with the existing `style.css` classes and wired up with the existing
+`app.js` helpers and message router — not a rebuilt frontend):
 - Bus scanner (sweep address range, report which respond and how)
 - Register Explorer (manual single-shot FC03/04/06/16 tool, arbitrary address/type/scale)
 - Wind Test panel (live decode of the current known wind register map + config write-back)
@@ -68,12 +77,16 @@ transceiver, 9600 8N1), opposite conversational role.
 
 ### 4.1 AtomS3 (M5Stack, ESP32-S3)
 
-Grove port (`HY2.0-4P`, the only externally-wired connector once the RS485
-Base is stacked underneath): `GND`, `5V`, `G2`, `G1`.
+**Confirmed on the bench: RX = `G5`, TX = `G6`.** This supersedes the
+official M5Stack pin-map page, which lists the `HY2.0-4P` Grove port as
+`G1`/`G2`/`5V`/`GND` — whatever the Atomic RS485 Base actually connects
+through on this hardware, it isn't that pair. Empirical result wins; see
+§4.2 and §9.
 
-Everything else on the module (`G5–G8` ADC/touch, `G38`/`G39` I²C, LCD/IMU/
+Everything else on the module (`G7`/`G8` ADC/touch, `G38`/`G39` I²C, LCD/IMU/
 button/IR pins) is unused by this design — internal to the AtomS3 or on solder
-pads we're not using. Source: `documentation/AtomS3/C123_PinMap_01.jpg`.
+pads we're not using. Source: `documentation/AtomS3/C123_PinMap_01.jpg`
+(the pin-map graphic that turned out not to match reality for the Grove pins).
 
 Deltas from the Atom Lite the template was built for:
 - **Native USB-CDC** (ESP32-S3) — flashing/monitor over the same USB-C port,
@@ -124,12 +137,10 @@ Same base hardware as the template. From
 - Physical: stacks on the Grove port, ~24×48 mm footprint, matches Atom form
   factor.
 
-**Open hardware question:** which of `G1`/`G2` is RX vs. TX once stacked —
-the base's own header is silkscreened `3V3, RX, TX, x, x` but that doesn't
-pin down which AtomS3 Grove pin lands on which base signal. Confirm on the
-bench (loopback test or scope) before hardcoding a `pin_config.h`; ESP32-S3's
-GPIO matrix means either assignment is just a `Serial.begin(9600, SERIAL_8N1,
-rxPin, txPin)` swap if guessed wrong on the first try.
+**Confirmed on the bench:** `G5` = RX, `G6` = TX — the base's own header
+(silkscreened `3V3, RX, TX, x, x`) lands on those two AtomS3 pins. Init as
+`Serial2.begin(9600, SERIAL_8N1, 5, 6)` (or equivalent `HardwareSerial`
+call); no further polarity verification needed.
 
 ## 5. Device under test — current register map
 
@@ -149,25 +160,25 @@ primary tool here, not a nice-to-have wrapped around a fixed decoder.
   DUT yet, unlike the S200 sensor's `0x1001` in the existing greenhouse
   firmware).
 
-### Input registers — FC04, read-only, Modicon 5-digit numbering
+### Input registers — FC04, read-only (raw address canonical; Modicon # for cross-reference against the DUT's own docs)
 
-| Register | Content | Unit | Range |
-|---|---|---|---|
-| 30001 | Wind direction, instantaneous | 0.1° | 0–3599 |
-| 30002 | Wind speed, instantaneous | 0.1 m/s | 0–65535 |
-| 30003 | Wind direction, averaged | 0.1° | 0–3599 |
-| 30004 | Wind speed, averaged | 0.1 m/s | 0–65535 |
-| 30005 | Raw pulse count | pulses/interval | 0–65535 |
+| Address (raw) | Modicon # | Content | Unit | Range |
+|---|---|---|---|---|
+| `0x0000` | 30001 | Wind direction, instantaneous | 0.1° | 0–3599 |
+| `0x0001` | 30002 | Wind speed, instantaneous | 0.1 m/s | 0–65535 |
+| `0x0002` | 30003 | Wind direction, averaged | 0.1° | 0–3599 |
+| `0x0003` | 30004 | Wind speed, averaged | 0.1 m/s | 0–65535 |
+| `0x0004` | 30005 | Raw pulse count | pulses/interval | 0–65535 |
 
 ### Holding registers — FC03 read / FC06 write single / FC16 write multiple
 
-| Register | Purpose | Unit | Range |
-|---|---|---|---|
-| 40001 | Device (slave) address | — | 1–247 |
-| 40002 | Direction calibration offset | 0.1° | 0–3599 |
-| 40003 | Measurement window | ms | default 1000 |
-| 40004 | Averaging window | s | default 10 |
-| ~~40005~~ | Low-speed cutoff (planned, not yet in firmware per DUT's own TODO) | — | — |
+| Address (raw) | Modicon # | Purpose | Unit | Range |
+|---|---|---|---|---|
+| `0x0000` | 40001 | Device (slave) address | — | 1–247 |
+| `0x0001` | 40002 | Direction calibration offset | 0.1° | 0–3599 |
+| `0x0002` | 40003 | Measurement window | ms | default 1000 |
+| `0x0003` | 40004 | Averaging window | s | default 10 |
+| ~~`0x0004`~~ | ~~40005~~ | Low-speed cutoff (planned, not yet in firmware per DUT's own TODO) | — | — |
 
 > ⚠️ **Scaling gotcha:** this DUT encodes at **×10** (implied one decimal
 > place). The S200 sensor already integrated into greenhouse-Controller's
@@ -176,12 +187,19 @@ primary tool here, not a nice-to-have wrapped around a fixed decoder.
 > factor. The Register Explorer's scale field should default to something
 > the user sets explicitly per-register, not a hardcoded ÷1000.
 
-> ⚠️ **Addressing gotcha:** 30001/40001-style numbers are the human
-> ("Modicon") convention, not the wire address. Wire address = `(register
-> _number % 10000) − 1`. So `30001` → FC04 address `0x0000`; `40003` →
-> FC03/06 address `0x0002`. The Register Explorer needs a toggle (§7) so this
-> conversion happens in one place instead of being re-derived by hand each
-> time.
+> ⚠️ **Addressing convention — raw is canonical here.** The DUT's own docs
+> use 30001/40001-style ("Modicon") numbers, but this project's existing
+> drivers (`s200.h`, `modbus_rtu.h`) already address registers as plain
+> 0-based wire addresses and use no Modicon numbers anywhere. To keep one
+> convention across the codebase rather than adding a second dialect, this
+> doc and the tester's internal API treat the **raw address as canonical**
+> (the tables above lead with it); Modicon numbers appear only as a
+> cross-reference column and as an accepted *input* format in the Register
+> Explorer (§7) — converted at the UI boundary via `wire_address =
+> (modicon_number % 10000) − 1` and never carried further into the code.
+> Worth raising the same convention switch upstream in
+> `windmeters-modbus-interface`'s own `scratchBook.md`, since that repo is
+> the actual source of the inconsistency (§9).
 
 ## 6. Software architecture
 
@@ -253,7 +271,17 @@ exactly where the defaults are most likely to be wrong.
 
 ## 7. Web UI
 
-Pages, replacing the template's sensor-config page with scan/test/explore:
+**The GUI is the template's, ported — not redesigned.** `firmware/data/`
+is vanilla HTML/CSS/JS, no framework, no build step: one scrollable
+`index.html` with a `<section>` per feature, styled by `style.css`, wired
+up by `app.js`. What this doc calls "pages" below are sections on that one
+page, not separate routes or files. `app.js` already provides a
+`post(url, body)` helper for form submissions, `setText()` / `setBadge()` /
+`setSliderInput()` DOM helpers, and a WebSocket message router keyed on a
+`type` field — new sections use the same helpers and the same router
+convention (see WebSocket push below) rather than a parallel scheme.
+
+Sections, replacing the template's sensor-config section with scan/test/explore:
 
 - **Status (Home)** — WiFi mode/SSID/IP/RSSI, NTP sync indicator, uptime.
   Unchanged concept from template.
@@ -285,8 +313,10 @@ Pages, replacing the template's sensor-config page with scan/test/explore:
   └───────────────────────────────────────────────┘
   ```
 - **Register Explorer** *(new — generic tool)* — manual single-shot request:
-  address, FC (03/04/06/16), start register (raw *or* Modicon 5-digit, with
-  the §5 conversion applied automatically), count/value(s), interpretation
+  address, FC (03/04/06/16), start register entered as a **raw 0-based
+  address by default** (canonical, §5), with an optional Modicon 5-digit
+  entry mode ("40003") that converts to raw at input time and is never
+  stored or displayed as the canonical value, count/value(s), interpretation
   (uint16/int16/uint32/int32, byte/word order, scale factor). Decoded result
   + raw hex shown side by side. This is the tool that survives DUT register
   map changes without a firmware rebuild on the tester side. Saved/favourite
@@ -296,21 +326,32 @@ Pages, replacing the template's sensor-config page with scan/test/explore:
   from us.
 - **WiFi Settings** — unchanged from template.
 
-### WebSocket push (~1 s, same cadence as template)
+### WebSocket push — `type`-routed, matching `app.js`'s existing message router
+
+`app.js` already dispatches incoming JSON by a `type` field (`status`,
+`log`, `log_clear`, `replay_window` today, per the template's own message
+router). Reusing that router — instead of switching to one large per-tick
+object — means new messages are just new `type` values the existing
+dispatch `switch` grows a case for. `replay_window` is dropped (Replay mode
+is gone, §3); `status`, `log`, and `log_clear` carry over unchanged; `scan`
+and `wind` are new:
 
 ```json
-{
-  "mode": "idle | scanning | wind_test",
-  "scan": { "current_addr": 37, "range_end": 247, "found": [1, 31, 44] },
-  "wind": {
-    "addr": 31, "dir_instant_deg": 183.4, "dir_avg_deg": 181.0,
-    "speed_instant_ms": 4.2, "speed_avg_ms": 3.9, "raw_pulses": 27,
-    "last_ok": true, "age_ms": 420
-  },
-  "bus": { "crc_errors": 0, "timeouts": 2, "last_exception": null },
+// type: "status" — ~1 s cadence, same as template
+{ "type": "status",
   "wifi_mode": "STA", "wifi_ssid": "...", "wifi_ip": "...",
-  "ntp_synced": true, "local_time": "2026-07-01T14:30:45+02:00"
-}
+  "ntp_synced": true, "local_time": "2026-07-01T14:30:45+02:00",
+  "bus": { "crc_errors": 0, "timeouts": 2, "last_exception": null } }
+
+// type: "scan" — pushed while a Bus Scanner sweep is running
+{ "type": "scan", "current_addr": 37, "range_end": 247, "found": [1, 31, 44] }
+
+// type: "wind" — pushed while the Wind Test panel is polling
+{ "type": "wind", "addr": 31, "dir_instant_deg": 183.4, "dir_avg_deg": 181.0,
+  "speed_instant_ms": 4.2, "speed_avg_ms": 3.9, "raw_pulses": 27,
+  "last_ok": true, "age_ms": 420 }
+
+// type: "log" / "log_clear" — unchanged from template
 ```
 
 ### NVS keys
@@ -331,7 +372,7 @@ Pages, replacing the template's sensor-config page with scan/test/explore:
 
 Adapted from the template's 13-step sequence:
 
-1. Board bring-up: confirm `G1`/`G2` RX/TX polarity (§4.1/§4.2 open question), UART loopback
+1. Board bring-up: UART loopback test on the confirmed `G5` (RX) / `G6` (TX) pins (§4.1)
 2. Modbus master core: CRC16, frame builder, timeout/retry (§6.3)
 3. **Bus Scanner** (replaces "modbus slave skeleton")
 4. **Register Explorer** generic read/write (replaces FG6485A/S200 emulation steps)
@@ -347,9 +388,11 @@ Adapted from the template's 13-step sequence:
 
 ## 9. Open questions
 
-- [ ] AtomS3 `G1`/`G2` → RS485 base RX/TX polarity — still needs a bench
-      check (loopback test or scope); couldn't find an official example
-      sketch for plain AtomS3 + this specific base
+- [x] AtomS3 → RS485 base RX/TX polarity — resolved by bench test:
+      **`G5` = RX, `G6` = TX**. Contradicts the official M5Stack pin-map
+      page (which lists the `HY2.0-4P` Grove port as `G1`/`G2`) — the
+      confirmed empirical result is what's used throughout this doc
+      (§4.1, §4.2, §8).
 - [x] AtomS3 RGB LED GPIO — resolved: **GPIO35**, WS2812B, confirmed via a
       working test sketch (`Atom-RS485-Base-explorations/blinkyS3`) on the
       actual target hardware. Template's RGB LED convention ports directly
@@ -365,6 +408,15 @@ Adapted from the template's 13-step sequence:
       `windmeters-modbus-interface`'s own scratchBook.md rather than
       mirroring its TODO list; that repo stays the source of truth for
       register-map changes.
+- [x] Addressing convention — **decision: raw 0-based wire addresses are
+      canonical**, matching the existing `s200.h`/`modbus_rtu.h` drivers
+      (neither uses Modicon numbers). Modicon 30001/40001-style numbers are
+      accepted as Register Explorer input only, converted at the boundary,
+      never carried further into the tester's code (§5, §7). **Applied
+      upstream too:** `windmeters-modbus-interface`'s own `design/
+      scratchBook.md` has been updated to the same raw-address-canonical /
+      Modicon-cross-reference convention (its `main.c` was still scaffolding
+      with no register code yet, so this was a docs-only change there).
 
 ## 10. References
 

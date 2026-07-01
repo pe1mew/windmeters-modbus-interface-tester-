@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Windmeter Tester</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Windmeters Modbus Interface Tester</h1>
+  <span id="ws-badge" class="badge offline">Offline</span>
+</header>
+
+<!-- ── Status ──────────────────────────────────────────────────── -->
+<section>
+  <h2>Status</h2>
+  <div class="grid4">
+
+    <div class="card">
+      <h3>WiFi</h3>
+      <p>Mode: <strong id="st-wifi-mode">—</strong></p>
+      <p>SSID: <strong id="st-wifi-ssid">—</strong></p>
+      <p>IP: <strong id="st-wifi-ip">—</strong></p>
+      <p>RSSI: <strong id="st-wifi-rssi">—</strong> dBm</p>
+    </div>
+
+    <div class="card">
+      <h3>Clock</h3>
+      <p id="st-time">—</p>
+      <span id="st-ntp" class="badge ntp-off">NTP pending</span>
+    </div>
+
+    <div class="card">
+      <h3>Modbus Bus</h3>
+      <p>CRC errors: <strong id="st-bus-crc">—</strong></p>
+      <p>Timeouts: <strong id="st-bus-timeouts">—</strong></p>
+      <p>Last exception: <strong id="st-bus-exc">—</strong></p>
+    </div>
+
+    <div class="card">
+      <h3>Uptime</h3>
+      <p id="st-uptime">—</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── Bus Scanner ─────────────────────────────────────────────── -->
+<section>
+  <h2>Bus Scanner</h2>
+  <div class="row">
+    <label>Address range</label>
+    <input type="number" id="scan-start" min="1" max="247" value="1" class="short">
+    <span>to</span>
+    <input type="number" id="scan-end" min="1" max="247" value="247" class="short">
+    <button id="btn-scan-start" onclick="postScanStart()">&#9654; Start</button>
+    <button id="btn-scan-stop" onclick="postScanStop()" disabled>&#9632; Stop</button>
+  </div>
+  <div class="row">
+    <label>Presets</label>
+    <button class="btn-sm" onclick="setScanRange(1,247)">Full (1-247)</button>
+    <button class="btn-sm" onclick="setScanRange(30,36)">Windmeter (30-36)</button>
+    <button class="btn-sm" onclick="setScanRange(44,44)">S200 (44)</button>
+  </div>
+  <p id="scan-progress" class="hint">Idle.</p>
+  <table id="scan-tbl">
+    <thead><tr><th>Address</th></tr></thead>
+    <tbody id="scan-body"></tbody>
+  </table>
+</section>
+
+<!-- ── Wind Test ───────────────────────────────────────────────── -->
+<section>
+  <h2>Wind Test</h2>
+  <div class="row">
+    <label>Slave address</label>
+    <input type="number" id="wind-addr" min="1" max="247" value="31" class="short">
+    <label>Poll interval (ms)</label>
+    <input type="number" id="wind-interval" min="100" value="1000" class="short">
+    <button id="btn-wind-start" onclick="postWindStart()">&#9654; Start</button>
+    <button id="btn-wind-stop" onclick="postWindStop()" disabled>&#9632; Stop</button>
+  </div>
+
+  <div class="grid4">
+    <div class="card">
+      <h3>Direction</h3>
+      <p>Instant: <strong id="wind-dir-instant">—</strong> °</p>
+      <p>Average: <strong id="wind-dir-avg">—</strong> °</p>
+    </div>
+    <div class="card">
+      <h3>Speed</h3>
+      <p>Instant: <strong id="wind-speed-instant">—</strong> m/s</p>
+      <p>Average: <strong id="wind-speed-avg">—</strong> m/s</p>
+    </div>
+    <div class="card">
+      <h3>Raw</h3>
+      <p>Pulses: <strong id="wind-pulses">—</strong></p>
+      <p>Age: <strong id="wind-age">—</strong> ms</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:.75rem">Config (holding registers)</h3>
+  <div class="row">
+    <label>Device address</label>
+    <input type="number" id="wind-cfg-addr" min="1" max="247" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('device_addr')">Write</button>
+  </div>
+  <div class="row">
+    <label>Direction offset (°)</label>
+    <input type="number" id="wind-cfg-offset" step="0.1" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('dir_offset')">Write</button>
+  </div>
+  <div class="row">
+    <label>Measurement window (ms)</label>
+    <input type="number" id="wind-cfg-meas" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('measurement_window')">Write</button>
+  </div>
+  <div class="row">
+    <label>Averaging window (s)</label>
+    <input type="number" id="wind-cfg-avg" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('averaging_window')">Write</button>
+  </div>
+  <button onclick="postWindConfigRead()">Refresh config from device</button>
+  <p id="wind-config-status" class="hint"></p>
+</section>
+
+<!-- ── Register Explorer ───────────────────────────────────────── -->
+<section>
+  <h2>Register Explorer</h2>
+  <p class="hint">Generic single-shot FC03/04/06/16 tool — survives DUT register map changes without a firmware rebuild here.</p>
+  <div class="row">
+    <label>Address</label>
+    <input type="number" id="exp-addr" min="1" max="247" value="31" class="short">
+    <label>Function</label>
+    <select id="exp-fc">
+      <option value="3">FC03 read holding</option>
+      <option value="4" selected>FC04 read input</option>
+      <option value="6">FC06 write single</option>
+      <option value="16">FC16 write multiple</option>
+    </select>
+  </div>
+  <div class="row">
+    <label>Register format</label>
+    <label class="radio"><input type="radio" name="exp-fmt" value="raw" checked> Raw (0x..)</label>
+    <label class="radio"><input type="radio" name="exp-fmt" value="modicon"> Modicon (30001/40001-style)</label>
+    <input type="text" id="exp-reg" value="0x0000" class="short">
+  </div>
+  <div class="row">
+    <label>Count / value</label>
+    <input type="number" id="exp-count" min="1" max="125" value="1" class="short">
+    <input type="text" id="exp-values" placeholder="comma-separated, for write" class="wide">
+  </div>
+  <button onclick="postExplorerQuery()">Send</button>
+  <p id="exp-result" class="hint"></p>
+</section>
+
+<!-- ── System Settings ──────────────────────────────────────────── -->
+<section>
+  <h2>System Settings</h2>
+
+  <h3>WiFi</h3>
+  <div class="row">
+    <label>SSID</label>
+    <input type="text" id="wifi-ssid" maxlength="32" class="wide">
+  </div>
+  <div class="row">
+    <label>Password</label>
+    <input type="password" id="wifi-pass" maxlength="63" class="wide">
+  </div>
+  <button onclick="postWifi()">Connect</button>
+  <p class="hint">After connecting, the AP is disabled. Reconnect via
+    <code>http://windmeter-tester.local</code> or the assigned IP.</p>
+
+  <hr>
+  <h3>NTP</h3>
+  <div class="row">
+    <label>NTP server</label>
+    <input type="text" id="ntp-server" value="pool.ntp.org" class="wide">
+  </div>
+  <button onclick="postNtp()">Set NTP server</button>
+
+  <hr>
+  <h3>Manual time (UTC)</h3>
+  <div class="row">
+    <label>Date &amp; time</label>
+    <input type="datetime-local" id="manual-time" class="wide">
+  </div>
+  <button onclick="postTime()">Set time</button>
+
+  <hr>
+  <h3>Modbus</h3>
+  <div class="row">
+    <label>Timeout (ms)</label>
+    <input type="number" id="mb-timeout" min="50" class="short">
+  </div>
+  <div class="row">
+    <label>Retries</label>
+    <input type="number" id="mb-retries" min="0" max="5" class="short">
+  </div>
+  <button onclick="postModbusSettings()">Apply</button>
+</section>
+
+<!-- ── Modbus log ───────────────────────────────────────────────── -->
+<section>
+  <h2>Modbus Log
+    <button class="btn-sm" onclick="postLogClear()" style="float:right">Clear</button>
+  </h2>
+  <div id="log-wrap">
+    <table id="log-tbl">
+      <thead>
+        <tr><th>Time</th><th>Dir</th><th>Frame (hex)</th><th>Summary</th></tr>
+      </thead>
+      <tbody id="log-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<script src="app.js"></script>
+
+<footer>
+  <span>Windmeters Modbus Interface Tester</span>
+  <a href="https://github.com/pe1mew/windmeters-modbus-interface-tester-"
+     target="_blank" rel="noopener noreferrer">GitHub &nearr;</a>
+</footer>
+</body>
+</html>
