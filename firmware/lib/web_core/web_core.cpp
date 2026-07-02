@@ -1,6 +1,22 @@
 #include "web_core.h"
+#include "ntp_manager.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+
+/* Same UTC-breakdown either way, but the native test build (MinGW on
+ * Windows) doesn't expose POSIX gmtime_r — only Microsoft's gmtime_s
+ * (reversed argument order, tm* first). The ESP32/Arduino target has no
+ * _WIN32 define and takes the gmtime_r branch, matching web_server_task.cpp's
+ * own use of it. */
+static void gmtime_portable(time_t epoch, struct tm *out)
+{
+#if defined(_WIN32) || defined(_WIN64)
+    gmtime_s(out, &epoch);
+#else
+    gmtime_r(&epoch, out);
+#endif
+}
 
 uint16_t web_core_modicon_to_raw(uint32_t modicon_number)
 {
@@ -330,6 +346,7 @@ int web_core_build_api_log_json(char *out, size_t out_size, const mb_log_entry_t
 
     /* entries[] is newest-first (mblog_get_recent's convention) — walk it
      * backwards to emit oldest-first ("newest last", design/api.md §5.4). */
+    bool synced = ntp_manager_is_synced();
     for (size_t i = 0; i < count; i++) {
         if ((size_t)n >= out_size) {
             break;
@@ -337,9 +354,30 @@ int web_core_build_api_log_json(char *out, size_t out_size, const mb_log_entry_t
         const mb_log_entry_t *e = &entries[count - 1 - i];
         char hex[800];
         format_hex(hex, sizeof(hex), e->raw, e->raw_len);
+
+        /* Same "ISO-8601 UTC once synced, else uptime ms + clock:uptime"
+         * contract as POST /api/v1/modbus's ts field (design/api.md §3) —
+         * each entry converts its own stored timestamp_ms (millis-at-log-time)
+         * via the recorded sync reference point, not "now", since these are
+         * historical entries. */
+        char ts_buf[32];
+        const char *clock_field;
+        if (synced) {
+            time_t epoch = (time_t)ntp_manager_millis_to_epoch(e->timestamp_ms);
+            struct tm tm_val;
+            gmtime_portable(epoch, &tm_val);
+            snprintf(ts_buf, sizeof(ts_buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                     tm_val.tm_year + 1900, tm_val.tm_mon + 1, tm_val.tm_mday,
+                     tm_val.tm_hour, tm_val.tm_min, tm_val.tm_sec);
+            clock_field = "";
+        } else {
+            snprintf(ts_buf, sizeof(ts_buf), "%u", (unsigned)e->timestamp_ms);
+            clock_field = ",\"clock\":\"uptime\"";
+        }
+
         int added = snprintf(out + n, out_size - (size_t)n,
-            "%s{\"ts\":\"%u\",\"clock\":\"uptime\",\"dir\":\"%s\",\"hex\":\"%s\",\"summary\":\"%s\"}",
-            (i == 0) ? "" : ",", (unsigned)e->timestamp_ms, e->is_tx ? "TX" : "RX", hex, e->summary);
+            "%s{\"ts\":\"%s\"%s,\"dir\":\"%s\",\"hex\":\"%s\",\"summary\":\"%s\"}",
+            (i == 0) ? "" : ",", ts_buf, clock_field, e->is_tx ? "TX" : "RX", hex, e->summary);
         if (added < 0) {
             return added;
         }

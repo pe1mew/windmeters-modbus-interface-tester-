@@ -85,11 +85,13 @@ this one, to avoid the two drifting apart.
 `Preferences` library (this project is `framework = arduino`, unlike
 greenhouse-Controller's ESP-IDF `nvs_config` — same underlying flash
 storage, different wrapper). Persists every key in `scratchbook.md` §7's
-NVS table: `wifi_ssid`, `wifi_pass`, `ntp_server`, `tz_posix`, `mb_baud`,
+NVS table: `wifi_ssid`, `wifi_pass`, `ntp_server`, `mb_baud`,
 `mb_timeout_ms`, `mb_retries`, `scan_range_start`, `scan_range_end`,
 `wind_speed_addr`, `wind_dir_addr`, `wind_poll_interval_ms`. (The last two
 wind keys were one shared `wind_test_addr` before the 2026-07-02 speed/
-direction split — see TASK-WIND below.)
+direction split — see TASK-WIND below. `tz_posix` was dropped the same
+day — declared but never actually read/written anywhere; genuinely dead
+per the note below TASK-NTP.)
 
 **API surface:**
 
@@ -269,8 +271,15 @@ any RS-485 hardware is wired up.
 timestamp `LIB-LOG` entries and display local time on the Status page —
 narrower scope than the template, since the template also needed
 DST-aware local time for CSV Replay comparison, and Replay mode was
-dropped (`scratchbook.md` §3). TZ resolution from lat/lon is kept for
-display purposes even though nothing depends on it functionally anymore.
+dropped (`scratchbook.md` §3). No timezone/lat-lon handling of any kind
+exists here — everything is UTC (`configTime(0, 0, server)`, no DST). The
+`tz_posix` NVS key inherited from the template's key list was a remnant of
+that dropped scope; removed 2026-07-02 once a dead-code audit confirmed it
+was declared but never read or written anywhere.
+`test_log_timestamps_use_synced_time` below is now implemented:
+`GET /api/v1/log` entries use real ISO-8601 UTC timestamps
+(`ntp_manager_millis_to_epoch()`) once synced, uptime-ms with a
+`"clock":"uptime"` tag otherwise — see `web_core_build_api_log_json()`.
 
 **Acceptance tests** (target):
 

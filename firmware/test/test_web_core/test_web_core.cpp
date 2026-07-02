@@ -5,9 +5,14 @@
  */
 #include <unity.h>
 #include "web_core.h"
+#include "ntp_manager.h"
 #include <string.h>
 
-void setUp(void) {}
+/* web_core_build_api_log_json() reads ntp_manager's synced/reference-point
+ * state directly (design/api.md §3's ISO-8601-once-synced contract) — reset
+ * it before every test so an earlier test's ntp_manager_record_sync() call
+ * can't leak into a later one that expects the not-synced default. */
+void setUp(void) { ntp_manager_reset(); }
 void tearDown(void) {}
 
 /* ── Modicon conversion — scratchbook.md §5's own worked examples ── */
@@ -471,6 +476,49 @@ void test_api_log_json_reverses_newest_first_to_oldest_first(void)
         buf);
 }
 
+void test_api_log_json_uses_iso8601_when_synced(void)
+{
+    /* At millis()=1000, wall clock was epoch 1700000000
+     * (2023-11-14T22:13:20Z). An entry logged 42000ms (42s) later converts
+     * to epoch 1700000042 -> 2023-11-14T22:14:02Z. */
+    ntp_manager_record_sync(1000, 1700000000);
+
+    mb_log_entry_t entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.timestamp_ms = 43000;
+    entry.is_tx = true;
+    entry.raw[0] = 0xAA; entry.raw_len = 1;
+    strcpy(entry.summary, "synced");
+
+    char buf[256];
+    web_core_build_api_log_json(buf, sizeof(buf), &entry, 1);
+
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"ok\":true,\"entries\":["
+        "{\"ts\":\"2023-11-14T22:14:02Z\",\"dir\":\"TX\",\"hex\":\"AA\",\"summary\":\"synced\"}"
+        "]}",
+        buf);
+}
+
+void test_api_log_json_not_synced_has_no_clock_field_confusion(void)
+{
+    /* Sanity check the two code paths never mix — no "clock" field at all
+     * (synced or not) other than the literal ",\"clock\":\"uptime\"" tag
+     * the not-synced path emits. */
+    mb_log_entry_t entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.timestamp_ms = 500;
+    entry.is_tx = false;
+    entry.raw[0] = 0xCC; entry.raw_len = 1;
+    strcpy(entry.summary, "unsynced");
+
+    char buf[256];
+    web_core_build_api_log_json(buf, sizeof(buf), &entry, 1);
+
+    TEST_ASSERT_TRUE(strstr(buf, "\"ts\":\"500\"") != NULL);
+    TEST_ASSERT_TRUE(strstr(buf, "\"clock\":\"uptime\"") != NULL);
+}
+
 /* ── uptime HH:MM:SS formatting (GUI Modbus Log display) ── */
 
 void test_format_uptime_hhmmss_basic(void)
@@ -605,6 +653,8 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_api_wind_json_direction_with_data);
     RUN_TEST(test_api_log_json_empty);
     RUN_TEST(test_api_log_json_reverses_newest_first_to_oldest_first);
+    RUN_TEST(test_api_log_json_uses_iso8601_when_synced);
+    RUN_TEST(test_api_log_json_not_synced_has_no_clock_field_confusion);
     RUN_TEST(test_api_scan_json_scanning_shape);
     RUN_TEST(test_api_scan_json_done_shape_with_found_devices);
     RUN_TEST(test_api_scan_json_idle_no_current_no_duration);

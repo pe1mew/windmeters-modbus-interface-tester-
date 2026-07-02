@@ -10,23 +10,28 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added
+---
 
-- Firmware version tracking: `platformio.ini`'s `[env:windmeterTester]`
-  now sets a `FIRMWARE_VERSION` build flag, surfaced as `fw_version` in
-  both the WebSocket `type:"status"` payload and `GET /api/v1/status`,
-  and displayed in the web UI's footer (e.g. `v0.4.0`) — useful for
-  confirming an OTA/reflash landed the build you expected.
+## [0.4.1] - 2026-07-02
 
-### Changed
+### Removed
 
-- Web UI footer: the firmware version is now separated from the app name
-  with a middot (`Windmeters Modbus Interface Tester · v0.4.0`) instead of
-  just a space.
-- Wind Speed / Wind Direction tabs: the "only one sensor can poll at a
-  time" hint now has proper vertical spacing before the live-value tiles
-  below it (previously butted directly against them with no gap) —
-  matches the spacing rhythm used elsewhere in the GUI.
+- `CFG_KEY_TZ_POSIX`/`CFG_DEFAULT_TZ_POSIX` NVS key — declared but never
+  actually read or written anywhere, found via a full dead-code audit.
+  `completeRealisationPlan.md`'s own TASK-NTP writeup already called
+  timezone handling vestigial; the code just hadn't caught up.
+- `ntp_to_epoch()` (the Arduino-only wrapper in `ntp_task.h`) — also found
+  dead by the same audit. Rather than wire callers through it, the fix
+  below calls the pure `ntp_manager_millis_to_epoch()` it wrapped directly
+  from `web_core.cpp`, which made the wrapper itself redundant.
+
+### Fixed
+
+- `GET /api/v1/log` entries now use real ISO-8601 UTC timestamps once NTP
+  is synced, matching `design/api.md` §3's already-documented contract —
+  previously always reported raw uptime-ms with `"clock":"uptime"`
+  regardless of sync state, a gap the dead `ntp_to_epoch()` above turned
+  out to have been built for and never finished wiring in.
 
 ---
 
@@ -84,6 +89,12 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   moved into a tab bar between them.
 - Host-side (native) unit tests for every library — `pio test -e native`,
   **142 tests across 10 suites** (up from 91 at initial implementation).
+- Firmware version tracking: `platformio.ini`'s `[env:windmeterTester]`
+  sets a `FIRMWARE_VERSION` build flag, surfaced as `fw_version` in both
+  the WebSocket `type:"status"` payload and `GET /api/v1/status`, and
+  displayed in the web UI's footer (e.g. `v0.4.0`) — useful for confirming
+  an OTA/reflash landed the build you expected. This is the project's
+  first tagged version.
 
 ### Changed
 
@@ -102,6 +113,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   and returns only that sensor's fields (was one object carrying both);
   `GET /api/v1/spec`'s `dut_register_snapshot` is now keyed by
   `wind_speed`/`wind_direction` for the same reason.
+- Web UI footer: the firmware version is now separated from the app name
+  with a middot (`Windmeters Modbus Interface Tester · v0.4.0`) instead of
+  just a space.
+- Wind Speed / Wind Direction tabs: the "only one sensor can poll at a
+  time" hint now has proper vertical spacing before the live-value tiles
+  below it (previously butted directly against them with no gap) —
+  matches the spacing rhythm used elsewhere in the GUI.
 
 ### Fixed
 

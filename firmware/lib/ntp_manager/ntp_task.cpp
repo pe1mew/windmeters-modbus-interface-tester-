@@ -45,11 +45,6 @@ bool ntp_is_synced(void)
     return ntp_manager_is_synced();
 }
 
-uint32_t ntp_to_epoch(uint32_t millis_value)
-{
-    return ntp_manager_millis_to_epoch(millis_value);
-}
-
 bool ntp_set_manual_time(const manual_time_t *t)
 {
     if (!ntp_manager_validate_manual_time(t)) {

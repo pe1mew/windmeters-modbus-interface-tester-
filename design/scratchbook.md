@@ -411,7 +411,6 @@ and `wind` are new:
 |---|---|---|---|
 | `wifi_ssid` / `wifi_pass` | str | "" | unchanged from template |
 | `ntp_server` | str | `pool.ntp.org` | unchanged from template |
-| `tz_posix` | str | "" | unchanged from template |
 | `mb_baud` | u32 | 9600 | Modbus baud (kept configurable — DUT firmware is still moving) |
 | `mb_timeout_ms` | u16 | 200 | Response timeout |
 | `mb_retries` | u8 | 1 | Retry count before marking a transaction failed |

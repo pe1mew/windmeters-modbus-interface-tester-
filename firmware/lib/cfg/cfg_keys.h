@@ -24,7 +24,6 @@
 #define CFG_KEY_WIFI_SSID            "wifi_ssid"
 #define CFG_KEY_WIFI_PASS            "wifi_pass"
 #define CFG_KEY_NTP_SERVER           "ntp_server"
-#define CFG_KEY_TZ_POSIX             "tz_posix"
 #define CFG_KEY_MB_BAUD              "mb_baud"
 #define CFG_KEY_MB_TIMEOUT_MS        "mb_timeout_ms"
 #define CFG_KEY_MB_RETRIES           "mb_retries"
@@ -41,7 +40,6 @@
 #define CFG_DEFAULT_WIFI_SSID          ""
 #define CFG_DEFAULT_WIFI_PASS          ""
 #define CFG_DEFAULT_NTP_SERVER         "pool.ntp.org"
-#define CFG_DEFAULT_TZ_POSIX           ""
 #define CFG_DEFAULT_MB_BAUD            9600u
 #define CFG_DEFAULT_MB_TIMEOUT_MS      200u
 #define CFG_DEFAULT_MB_RETRIES         1u

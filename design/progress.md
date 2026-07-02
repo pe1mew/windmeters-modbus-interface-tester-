@@ -4,8 +4,8 @@
 |--------------|-------------------------------------------|
 | Document     | Progress Snapshot                         |
 | Project      | Windmeters Modbus Interface Tester        |
-| Date         | 2026-07-02 (updated again — wind split, GUI restructure, log fix, first version tag) |
-| Status       | **Tagged v0.4.0** (`changelog.md`) — Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) eight-of-nine done (`whatsNext.md` §3); wind speed/direction split + GUI restructure done (§10 below). Firmware now reports its own version (`fw_version`, WS status + `GET /api/v1/status` + web UI footer) — see `changelog.md` `[Unreleased]`. |
+| Date         | 2026-07-02 (updated again — dead-code cleanup, log timestamps fixed, v0.4.1) |
+| Status       | **Tagged v0.4.1** (`changelog.md`) — Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) eight-of-nine done (`whatsNext.md` §3); wind speed/direction split + GUI restructure done (§10 below). Firmware reports its own version (`fw_version`, WS status + `GET /api/v1/status` + web UI footer). v0.4.1: removed a dead NVS key + a dead function found by a full dead-code audit, and closed a real gap where `GET /api/v1/log` never actually used real timestamps even when NTP was synced. |
 | Related docs | `design/completeRealisationPlan.md` (Parts A/B this reports against), `design/realisationPlan.md` (MB-1/MB-2 detail), `design/scratchbook.md` (design source of truth), `design/whatsNext.md` (what follows this) |
 
 ---

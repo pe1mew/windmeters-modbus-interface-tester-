@@ -24,9 +24,6 @@ void ntp_task_start(void);
 
 bool ntp_is_synced(void);
 
-/** @brief Convert a millis()-since-boot value (e.g. from a log entry) to Unix epoch seconds. */
-uint32_t ntp_to_epoch(uint32_t millis_value);
-
 /**
  * @brief Apply a manually-entered date/time (web UI fallback path).
  * @return false if @p t fails validation — nothing is applied in that case.
