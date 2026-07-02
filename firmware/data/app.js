@@ -56,6 +56,8 @@ function switchTab(id) {
 let mbSettingsPopulated = false;
 
 function handleStatus(s) {
+  setText('fw-version', s.fw_version ? ('v' + s.fw_version) : '');
+
   setText('st-wifi-mode', s.wifi_mode || '—');
   setText('st-wifi-ssid', s.wifi_ssid || '—');
   setText('st-wifi-ip',   s.wifi_ip   || '—');

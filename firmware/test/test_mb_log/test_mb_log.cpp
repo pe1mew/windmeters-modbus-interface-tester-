@@ -99,6 +99,51 @@ void test_mblog_get_recent_respects_max_count(void)
     TEST_ASSERT_EQUAL_STRING("b", out[0].summary);
 }
 
+void test_mblog_total_appended_keeps_counting_past_ring_wrap(void)
+{
+    /* Capacity is 3 (set in setUp); append 5 -> mblog_count() caps at 3,
+     * but a poller catching up on missed broadcasts needs the true total
+     * appended, not the ring buffer's current occupancy. */
+    mb_log_entry_t entries[5] = {
+        make_entry(1, "e1"), make_entry(2, "e2"), make_entry(3, "e3"),
+        make_entry(4, "e4"), make_entry(5, "e5"),
+    };
+    for (int i = 0; i < 5; i++) {
+        mblog_append(&entries[i]);
+    }
+
+    TEST_ASSERT_EQUAL_UINT32(3, mblog_count());
+    TEST_ASSERT_EQUAL_UINT32(5, mblog_total_appended());
+}
+
+void test_mblog_total_appended_survives_clear(void)
+{
+    /* mblog_clear() empties the visible buffer but must NOT reset the
+     * total — a caller tracking "entries broadcast so far" against this
+     * counter would otherwise re-broadcast (or double-count) around a
+     * Clear button click. Only mblog_init() starts the total over. */
+    mb_log_entry_t a = make_entry(1, "a");
+    mb_log_entry_t b = make_entry(2, "b");
+    mblog_append(&a);
+    mblog_append(&b);
+
+    mblog_clear();
+
+    TEST_ASSERT_EQUAL_UINT32(0, mblog_count());
+    TEST_ASSERT_EQUAL_UINT32(2, mblog_total_appended());
+}
+
+void test_mblog_total_appended_reset_by_init(void)
+{
+    mb_log_entry_t a = make_entry(1, "a");
+    mblog_append(&a);
+    TEST_ASSERT_EQUAL_UINT32(1, mblog_total_appended());
+
+    mblog_init(3);
+
+    TEST_ASSERT_EQUAL_UINT32(0, mblog_total_appended());
+}
+
 int main(int /*argc*/, char ** /*argv*/)
 {
     UNITY_BEGIN();
@@ -106,5 +151,8 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_mblog_ring_wrap_drops_oldest);
     RUN_TEST(test_mblog_clear_empties_buffer);
     RUN_TEST(test_mblog_get_recent_respects_max_count);
+    RUN_TEST(test_mblog_total_appended_keeps_counting_past_ring_wrap);
+    RUN_TEST(test_mblog_total_appended_survives_clear);
+    RUN_TEST(test_mblog_total_appended_reset_by_init);
     return UNITY_END();
 }

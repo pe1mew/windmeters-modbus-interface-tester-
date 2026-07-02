@@ -81,6 +81,7 @@ int web_core_build_wind_json(char *out, size_t out_size, wind_sensor_type_t type
 }
 
 int web_core_build_status_json(char *out, size_t out_size,
+                                const char *fw_version,
                                 const char *wifi_mode, const char *wifi_ssid,
                                 const char *wifi_ip, int8_t wifi_rssi,
                                 bool ntp_synced, const char *local_time_iso,
@@ -96,11 +97,11 @@ int web_core_build_status_json(char *out, size_t out_size,
     }
 
     return snprintf(out, out_size,
-        "{\"type\":\"status\",\"wifi_mode\":\"%s\",\"wifi_ssid\":\"%s\",\"wifi_ip\":\"%s\","
+        "{\"type\":\"status\",\"fw_version\":\"%s\",\"wifi_mode\":\"%s\",\"wifi_ssid\":\"%s\",\"wifi_ip\":\"%s\","
         "\"wifi_rssi\":%d,\"ntp_synced\":%s,\"local_time\":\"%s\",\"uptime_s\":%u,"
         "\"mb_timeout_ms\":%u,\"mb_retries\":%u,"
         "\"bus\":{\"crc_errors\":%u,\"timeouts\":%u,\"last_exception\":%s}}",
-        wifi_mode, wifi_ssid, wifi_ip, (int)wifi_rssi, ntp_synced ? "true" : "false",
+        fw_version, wifi_mode, wifi_ssid, wifi_ip, (int)wifi_rssi, ntp_synced ? "true" : "false",
         local_time_iso, (unsigned)uptime_s,
         (unsigned)mb_timeout_ms, (unsigned)mb_retries,
         (unsigned)bus_health->crc_errors, (unsigned)bus_health->timeouts, exc_buf);
@@ -262,6 +263,7 @@ int web_core_build_api_modbus_error_json(char *out, size_t out_size,
 }
 
 int web_core_build_api_status_json(char *out, size_t out_size,
+                                    const char *fw_version,
                                     uint32_t uptime_s,
                                     const char *wifi_mode, const char *wifi_ssid,
                                     const char *wifi_ip, int8_t wifi_rssi,
@@ -278,12 +280,12 @@ int web_core_build_api_status_json(char *out, size_t out_size,
     }
 
     return snprintf(out, out_size,
-        "{\"ok\":true,\"uptime_s\":%u,"
+        "{\"ok\":true,\"fw_version\":\"%s\",\"uptime_s\":%u,"
         "\"wifi\":{\"mode\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d},"
         "\"ntp_synced\":%s,"
         "\"modbus\":{\"baud\":%u,\"timeout_ms\":%u,\"retries\":%u,\"crc_errors\":%u,\"timeouts\":%u,\"last_exception\":%s},"
         "\"busy\":{\"scan_running\":%s,\"wind_poll_active\":%s}}",
-        (unsigned)uptime_s, wifi_mode, wifi_ssid, wifi_ip, (int)wifi_rssi,
+        fw_version, (unsigned)uptime_s, wifi_mode, wifi_ssid, wifi_ip, (int)wifi_rssi,
         ntp_synced ? "true" : "false",
         (unsigned)mb_baud, (unsigned)mb_timeout_ms, (unsigned)mb_retries,
         (unsigned)bus_health->crc_errors, (unsigned)bus_health->timeouts, exc_buf,

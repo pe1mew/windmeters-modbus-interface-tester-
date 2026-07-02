@@ -4,8 +4,8 @@
 |--------------|--------------------------------------------------------------|
 | Document     | API Specification                                            |
 | Project      | Windmeters Modbus Interface Tester                           |
-| Status       | Draft / proposed — not yet implemented                       |
-| Date         | 2026-07-02                                                   |
+| Status       | **Implemented** — all 7 endpoints below are live and hardware-verified (`design/progress.md` §7, `design/whatsNext.md` §2) |
+| Date         | 2026-07-02 (implemented same day; wind endpoints updated 2026-07-02 for the speed/direction split) |
 | Audience     | Any HTTP-capable tool; designed specifically so an LLM (Claude) can drive the tester during bench sessions |
 | Related docs | `design/scratchbook.md` (§6.3 master core API, §7 web UI endpoints), `firmware/lib/web_server/web_server_task.cpp` (existing UI endpoints this generalises) |
 
@@ -136,19 +136,21 @@ the configured timeout/retries), return the outcome.
 
 ### 4.2 Response — success (HTTP 200)
 
-Read example (`FC04`, 5 registers from slave 31 — the DUT's full input map):
+Read example (`FC04`, 3 registers from slave 30 — the Wind Speed variant's
+full input map; Wind Direction at slave 31 has its own, shorter 2-register
+map, see `design/scratchbook.md` §5 for both):
 
 ```json
 {
   "ok": true,
   "status": "ok",
-  "slave": 31,
+  "slave": 30,
   "function": 4,
   "register": 0,
-  "count": 5,
-  "registers": [1834, 42, 1810, 39, 27],
-  "raw_tx": "1F 04 00 00 00 05 33 F0",
-  "raw_rx": "1F 04 0A 07 2A 00 2A 07 12 00 27 00 1B 61 4C",
+  "count": 3,
+  "registers": [42, 39, 27],
+  "raw_tx": "1E 04 00 00 00 03 B2 64",
+  "raw_rx": "1E 04 06 00 2A 00 27 00 1B 05 65",
   "round_trip_ms": 38,
   "attempts": 1,
   "ts": "2026-07-02T14:30:45Z"
@@ -165,8 +167,8 @@ Write example (`FC06`, set direction calibration offset):
   "function": 6,
   "register": 1,
   "written": [150],
-  "raw_tx": "1F 06 00 01 00 96 5B 94",
-  "raw_rx": "1F 06 00 01 00 96 5B 94",
+  "raw_tx": "1F 06 00 01 00 96 5B DA",
+  "raw_rx": "1F 06 00 01 00 96 5B DA",
   "round_trip_ms": 22,
   "attempts": 1,
   "ts": "2026-07-02T14:31:02Z"
@@ -194,7 +196,7 @@ Write example (`FC06`, set direction calibration offset):
   "slave": 35,
   "function": 4,
   "register": 0,
-  "raw_tx": "23 04 00 00 00 05 32 8D",
+  "raw_tx": "23 04 00 00 00 03 B6 89",
   "attempts": 2,
   "detail": "No response from slave 35 within 200 ms (2 attempts).",
   "hint": "Nothing answered at address 35. Run POST /api/v1/scan to list responding addresses; the wind-speed DUT variant defaults to 30 (or 35 jumpered), the direction variant to 31 (or 36 jumpered). Also check A/B wiring polarity and that exactly the bus ends are terminated."
@@ -212,8 +214,8 @@ Modbus exception example:
   "slave": 31,
   "function": 3,
   "register": 4,
-  "raw_tx": "1F 03 00 04 00 01 C4 4C",
-  "raw_rx": "1F 83 02 61 30",
+  "raw_tx": "1F 03 00 04 00 01 C6 75",
+  "raw_rx": "1F 83 02 A0 F7",
   "attempts": 1,
   "detail": "Slave 31 answered function 3 with exception 2 (illegal data address).",
   "hint": "The slave is alive but says holding register 4 does not exist. The DUT's register 40005 (low-speed cutoff) is planned but not yet implemented in its firmware — see the DUT's own scratchBook.md."
@@ -244,9 +246,13 @@ of a real result.
 
 Returns a JSON summary of this API: version, endpoint list with methods,
 request/response field tables, the `status` vocabulary (§7), and the
-current DUT register-map snapshot the Wind Test panel uses. Intent: an LLM
-given only `http://<ip>/api/v1/spec` can bootstrap a full test session
-without human-provided documentation.
+current DUT register-map snapshot the Wind Speed/Direction tabs use. Intent:
+an LLM given only `http://<ip>/api/v1/spec` can bootstrap a full test
+session without human-provided documentation.
+
+`dut_register_snapshot` is keyed by sensor type (`wind_speed`/
+`wind_direction`, 2026-07-02 — used to be one flat register list before the
+speed/direction split, `design/scratchbook.md` §5/§9):
 
 ```json
 {
@@ -255,8 +261,14 @@ without human-provided documentation.
   "endpoints": [ { "method": "POST", "path": "/api/v1/modbus", "summary": "...", "request": { }, "response": { } } ],
   "statuses": { "ok": "…", "timeout": "…", "crc_error": "…" },
   "dut_register_snapshot": {
-    "input_registers":   [ { "addr": 0, "name": "wind_dir_instant", "unit": "0.1 deg" } ],
-    "holding_registers": [ { "addr": 0, "name": "device_addr", "range": [1, 247] } ]
+    "wind_speed": {
+      "input_registers":   [ { "addr": 0, "name": "speed_instant", "unit": "0.1 m/s" } ],
+      "holding_registers": [ { "addr": 0, "name": "device_addr", "range": [1, 247] } ]
+    },
+    "wind_direction": {
+      "input_registers":   [ { "addr": 0, "name": "dir_instant", "unit": "0.1 deg" } ],
+      "holding_registers": [ { "addr": 0, "name": "device_addr", "range": [1, 247] } ]
+    }
   }
 }
 ```
@@ -266,6 +278,7 @@ without human-provided documentation.
 ```json
 {
   "ok": true,
+  "fw_version": "0.4.0",
   "uptime_s": 4021,
   "wifi": { "mode": "STA", "ssid": "bench", "ip": "192.168.1.42", "rssi": -61 },
   "ntp_synced": true,
@@ -274,6 +287,10 @@ without human-provided documentation.
   "busy": { "scan_running": false, "wind_poll_active": false }
 }
 ```
+
+`fw_version` is the tester's own firmware version (SemVer, `platformio.ini`'s
+`FIRMWARE_VERSION` build flag) — not to be confused with `GET /api/v1/spec`'s
+`"version"` field (§5.1), which is this *API's* version, not the firmware's.
 
 Mirrors the WebSocket `type:"status"` payload; lets a stateless client
 check "is a scan already hogging the bus?" before transacting.
@@ -327,8 +344,10 @@ A scan request while one is already running returns HTTP 409.
 
 ### 5.4 `GET /api/v1/log?n=20` — recent Modbus traffic
 
-Returns the last `n` (default 20, max = ring capacity, currently 32)
-TX/RX frames from the traffic log, newest last:
+Returns the last `n` (default 20, max = ring capacity, currently 50 —
+raised from 32 on 2026-07-02 once bench use showed that was too short to
+keep a whole scan or short session in view) TX/RX frames from the traffic
+log, newest last:
 
 ```json
 {
@@ -343,56 +362,83 @@ TX/RX frames from the traffic log, newest last:
 Useful to a client for post-hoc debugging ("show me what actually went
 over the wire while the wind poller was running").
 
-### 5.5 `GET /api/v1/wind` — cached wind reading
+### 5.5 `GET /api/v1/wind?type=speed|direction` — cached wind reading
 
 Added during spec review (§10) — not in the original draft. Without this,
 a machine client wanting wind data would have to re-issue `POST
 /api/v1/modbus` reads directly against the bus, bypassing
 `wind_poll_task`'s cache (doubling real bus traffic against the same
-registers whenever the Wind Test panel is also open) and re-deriving the
-DUT's ×10 decode client-side even though `wind_poll.cpp` already does it.
+registers whenever a Wind tab is also open) and re-deriving the DUT's ×10
+decode client-side even though `wind_poll.cpp` already does it.
+
+**Updated 2026-07-02 for the wind speed/direction split** (`design/scratchbook.md`
+§5, §9): wind speed and wind direction are separate physical units, each
+with its own register map, so this endpoint takes a `type` query parameter
+(`"speed"` default if omitted, or `"direction"`) and returns only that
+type's fields — it no longer returns both sensors' data in one combined
+object.
 
 ```json
+// GET /api/v1/wind?type=speed
 {
   "ok": true,
   "has_data": true,
-  "target": 31,
-  "dir_instant_deg": 183.4,
+  "target": 30,
+  "sensor_type": "speed",
   "speed_instant_ms": 4.2,
-  "dir_avg_deg": 181.0,
   "speed_avg_ms": 3.9,
   "raw_pulses": 27,
   "age_ms": 420
 }
 ```
 
-Same fields as the existing WebSocket `type:"wind"` payload
-(`web_core_build_wind_json`, already implemented and tested) — this is a
-new route over existing logic, not new decode logic. `has_data: false`
-when no target is active or nothing has been read yet, matching the
-WebSocket shape's existing convention. `target` is the currently-active
-`wind_test_addr`; absent (or `has_data: false`) when the Wind Test panel
-isn't active, since `wind_poll_task` is suspended in that state (§5's own
-Wind Test description in `completeRealisationPlan.md`).
+```json
+// GET /api/v1/wind?type=direction
+{
+  "ok": true,
+  "has_data": true,
+  "target": 31,
+  "sensor_type": "direction",
+  "dir_instant_deg": 183.4,
+  "dir_avg_deg": 181.0,
+  "age_ms": 420
+}
+```
+
+Same fields as the WebSocket `type:"wind"` payload for that sensor type
+(`web_core_build_wind_json`, `web_core_build_api_wind_json` — already
+implemented and tested) — this is a route over existing logic, not new
+decode logic. `{"ok":true,"has_data":false}` when the requested `type`
+isn't the one currently polling (only one of the two can be active at a
+time — `busy.wind_poll_active` in §5.2 reflects whichever is) or nothing
+has been read yet, matching the WebSocket shape's existing convention.
+`target` is the requested type's NVS-stored (or default) address —
+`wind_speed_addr`/`wind_dir_addr`, not the old single `wind_test_addr` —
+which may differ from the address actually in flight if a caller started
+polling with an ad hoc `addr` override via `POST /wind/start` rather than
+the stored default.
 
 ---
 
 ## 6. Worked examples (curl)
 
-Read the DUT's five wind input registers (raw addressing):
+Read the Wind Direction unit's two input registers (raw addressing; Wind
+Speed at slave 30 has its own 3-register map, `design/scratchbook.md` §5):
 
 ```sh
 curl -s -X POST http://192.168.4.1/api/v1/modbus \
   -H 'Content-Type: application/json' \
-  -d '{"slave": 31, "function": 4, "register": 0, "count": 5}'
+  -d '{"slave": 31, "function": 4, "register": 0, "count": 2}'
 ```
 
-Write the averaging window using a Modicon register number:
+Write the averaging window using a Modicon register number (holding
+register 2 on both wind types — `40003`, not `40004`; see §5's holding
+register tables for why this moved after the speed/direction split):
 
 ```sh
 curl -s -X POST http://192.168.4.1/api/v1/modbus \
   -H 'Content-Type: application/json' \
-  -d '{"slave": 31, "function": 6, "register": "40004", "register_format": "modicon", "values": [10]}'
+  -d '{"slave": 31, "function": 6, "register": "40003", "register_format": "modicon", "values": [10]}'
 ```
 
 Change the DUT's slave address (FC06 to holding register 0), then verify at
@@ -489,7 +535,7 @@ Elaborated 2026-07-02, cross-referenced against the actual `mb_master` /
       semantics (transaction 3 of 5 times out — abort the rest, or
       continue?), which cuts against design principle #1's "no session
       state" goal. Revisit only if a genuine multi-device fleet workflow
-      appears — same reasoning as the multi-device Wind Test dashboard
+      appears — same reasoning as the multi-device Wind dashboard
       already deferred to v2 (`scratchbook.md` §9).
 - [x] **Implementation placement** — new `api_server` library vs. extending
       `web_server_task` + `web_core`. **Decision: extend `web_server_task` +

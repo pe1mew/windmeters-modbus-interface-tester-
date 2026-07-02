@@ -1,6 +1,7 @@
 # Scratchbook — Windmeters Modbus Interface Tester
 
-Status: **draft / working notes** — 2026-07-01
+Status: **draft / working notes** — 2026-07-01 (updated 2026-07-02: wind
+speed/direction split, GUI restructure)
 
 This is a scratchbook, not a frozen spec — it captures current thinking so
 implementation can start, and it gets edited as decisions change. Mirrors the
@@ -64,14 +65,17 @@ transceiver, 9600 8N1), opposite conversational role.
   to feed synthetic values into the emulated slave. A master has nothing to
   synthesize (it reads a real physical sensor through a real DUT), so all four
   modes are dropped rather than ported.
-- "Sensor Configuration" page → **Bus Scanner** + **Wind Test** pages (§7)
+- "Sensor Configuration" page → **Bus Scanner** + **Wind Speed** / **Wind
+  Direction** pages (§7; shipped as one combined "Wind Test" page at
+  first, split into two 2026-07-02)
 
 **New** (as new `<section>` blocks inside the ported `index.html`, styled
 with the existing `style.css` classes and wired up with the existing
 `app.js` helpers and message router — not a rebuilt frontend):
 - Bus scanner (sweep address range, report which respond and how)
 - Register Explorer (manual single-shot FC03/04/06/16 tool, arbitrary address/type/scale)
-- Wind Test panel (live decode of the current known wind register map + config write-back)
+- Wind Speed / Wind Direction panels (live decode of each type's own
+  register map + config write-back)
 
 ## 4. Hardware
 
@@ -152,33 +156,59 @@ primary tool here, not a nice-to-have wrapped around a fixed decoder.
 
 - MCU: CH32V003J4M6 (RISC-V), transceiver MAX3485, 24 V passive PoE-style
   power over RJ45 (pins 4/5 +, 7/8 −).
-- Two build variants sharing one register map shape, distinguished by slave
-  address (solder-jumper selectable): wind **speed** (cup anemometer, pulse
-  counting on a hardware timer) at address **30** (or 35 jumpered), wind
-  **direction** (potentiometer, ADC) at address **31** (or 36 jumpered).
+- Two build variants, distinguished by slave address (solder-jumper
+  selectable): wind **speed** (cup anemometer, pulse counting on a hardware
+  timer) at address **30** (or 35 jumpered), wind **direction**
+  (potentiometer, ADC) at address **31** (or 36 jumpered).
 - 9600 8N1 (same as the template/base — no baud config register exists on the
   DUT yet, unlike the S200 sensor's `0x1001` in the existing greenhouse
   firmware).
 
-### Input registers — FC04, read-only (raw address canonical; Modicon # for cross-reference against the DUT's own docs)
+**Split register maps, not one shared shape (2026-07-02 correction):**
+speed and direction are **physically separate units**, not two personalities
+of one combined device — same PCB/firmware source, but the compile-time
+sensor-type define means a given unit's firmware only implements the
+registers its own sensor type needs, at compact per-device offsets starting
+from `0x0000`. The single 5-input/4-holding table this section used to carry
+was written before that was confirmed and doesn't correspond to either
+variant's actual firmware; corrected below (`firmware/lib/wind_poll/wind_poll.h`
+is the implementation these tables mirror).
+
+### Wind Speed (address 30/35) — input registers, FC04 read-only
+
+| Address (raw) | Modicon # | Content | Unit | Range |
+|---|---|---|---|---|
+| `0x0000` | 30001 | Wind speed, instantaneous | 0.1 m/s | 0–65535 |
+| `0x0001` | 30002 | Wind speed, averaged | 0.1 m/s | 0–65535 |
+| `0x0002` | 30003 | Raw pulse count | pulses/interval | 0–65535 |
+
+### Wind Speed (address 30/35) — holding registers, FC03 read / FC06 write single
+
+| Address (raw) | Modicon # | Purpose | Unit | Range |
+|---|---|---|---|---|
+| `0x0000` | 40001 | Device (slave) address | — | 1–247 |
+| `0x0001` | 40002 | Measurement window | ms | default 1000 |
+| `0x0002` | 40003 | Averaging window | s | default 10 |
+
+### Wind Direction (address 31/36) — input registers, FC04 read-only
 
 | Address (raw) | Modicon # | Content | Unit | Range |
 |---|---|---|---|---|
 | `0x0000` | 30001 | Wind direction, instantaneous | 0.1° | 0–3599 |
-| `0x0001` | 30002 | Wind speed, instantaneous | 0.1 m/s | 0–65535 |
-| `0x0002` | 30003 | Wind direction, averaged | 0.1° | 0–3599 |
-| `0x0003` | 30004 | Wind speed, averaged | 0.1 m/s | 0–65535 |
-| `0x0004` | 30005 | Raw pulse count | pulses/interval | 0–65535 |
+| `0x0001` | 30002 | Wind direction, averaged | 0.1° | 0–3599 |
 
-### Holding registers — FC03 read / FC06 write single / FC16 write multiple
+### Wind Direction (address 31/36) — holding registers, FC03 read / FC06 write single
 
 | Address (raw) | Modicon # | Purpose | Unit | Range |
 |---|---|---|---|---|
 | `0x0000` | 40001 | Device (slave) address | — | 1–247 |
 | `0x0001` | 40002 | Direction calibration offset | 0.1° | 0–3599 |
-| `0x0002` | 40003 | Measurement window | ms | default 1000 |
-| `0x0003` | 40004 | Averaging window | s | default 10 |
-| ~~`0x0004`~~ | ~~40005~~ | Low-speed cutoff (planned, not yet in firmware per DUT's own TODO) | — | — |
+| `0x0002` | 40003 | Averaging window | s | default 10 |
+
+The low-speed cutoff register from the original combined table (planned,
+not yet in DUT firmware per its own TODO) would land on Wind Speed if it
+ever ships — nothing currently reserves a slot for it on either map since
+neither has a `0x0003`.
 
 > ⚠️ **Scaling gotcha:** this DUT encodes at **×10** (implied one decimal
 > place). The S200 sensor already integrated into greenhouse-Controller's
@@ -231,7 +261,7 @@ lib_deps =
 |---|---|---|
 | `modbus_master_task` | Highest | Sole owner of the RS-485 UART. Executes one queued transaction (probe / read / write) at a time, enforces timeout + inter-frame gap, posts every TX/RX frame to the log queue. |
 | `scan_task` | Normal | On request, sweeps an address range through `modbus_master_task`, streams progress + hits to the web UI. Suspended when idle. |
-| `wind_poll_task` | Normal | While the Wind Test panel targets an address, polls the input registers (§5) at a configurable interval via `modbus_master_task`; updates shared state under mutex. Suspended when idle. |
+| `wind_poll_task` | Normal | While either the Wind Speed or Wind Direction tab targets an address (one at a time, §9), polls that type's own input registers (§5) at a configurable interval via `modbus_master_task`; updates shared state under mutex. Suspended when idle. |
 | `web_server_task` | Normal | HTTP + WebSocket server. Unchanged from template. |
 | `wifi_manager_task` | Normal | AP/STA switching, mDNS. Unchanged from template. |
 | `ntp_task` | Normal | Time sync, used only to timestamp the traffic log. Unchanged from template. |
@@ -284,47 +314,58 @@ convention (see WebSocket push below) rather than a parallel scheme.
 Sections, replacing the template's sensor-config section with scan/test/explore:
 
 - **Status (Home)** — WiFi mode/SSID/IP/RSSI, NTP sync indicator, uptime.
-  Unchanged concept from template.
-- **Bus Scanner** *(new)* — address range inputs (default 1–247, with quick
-  presets for 1/30/31/35/36/44 — the known defaults across this sensor
-  family), start/stop, live progress bar over WebSocket, results table:
-  address, responded Y/N, function code(s) that worked, round-trip ms, raw
-  probe response hex.
-- **Wind Test** *(new — the core ask)* — pick an address (from scan results
-  or typed in), live view of registers 30001–30005 decoded per §5, compass
-  dial for direction + numeric for speed, poll start/stop + interval, and a
-  config form for 40001–40004 (address/offset/windows) with FC06 write-back.
-  Targets one slave address at a time in v1 — a side-by-side multi-device
-  dashboard is deferred to v2 (§9). Rough layout:
-
-  ```
-  ┌─ Wind Test ───────────────────────────────────┐
-  │ Slave addr: [ 31 ▾]     Poll: [1000] ms  ▶/■ │
-  │                                               │
-  │      dir avg 181.0°        speed avg 3.9 m/s  │
-  │        (compass dial)         (numeric)       │
-  │  dir instant 183.4°     speed instant 4.2 m/s │
-  │  raw pulses: 27           last poll: 420ms ago│
-  │                                               │
-  │ ── Config (holding regs) ──────────────────   │
-  │ Device addr [31]  Dir offset [0.0°]           │
-  │ Meas window [1000ms]  Avg window [10s]        │
-  │                                    [Write]    │
-  └───────────────────────────────────────────────┘
-  ```
+  Unchanged concept from template. Pinned to the top of the page; doesn't
+  move into the tab layout below (2026-07-02 GUI restructure).
+- **Bus Scanner** *(new)* — address range inputs (default 1–247), start/stop,
+  live progress bar over WebSocket, results table: address, responded Y/N,
+  function code(s) that worked, round-trip ms, raw probe response hex.
+  Originally shipped with quick presets for 1/30/31/35/36/44 — removed
+  2026-07-02 (S200/address 44 is permanently out of scope, per the §9
+  decision below, and the remaining windmeter presets weren't pulling their
+  weight once Wind Speed/Direction got their own tabs with the right
+  default address already filled in).
+- **Wind Speed** and **Wind Direction** *(new — the core ask, split
+  2026-07-02)* — one tab each, not a combined "Wind Test" panel: speed and
+  direction are physically separate DUT units at separate addresses (§5),
+  so a single panel covering both no longer matched the hardware. Each tab
+  has its own register-map reference table (§5), slave-address + poll-interval
+  controls, live decoded values, and a config form scoped to that type's own
+  holding registers (Wind Speed: device address/measurement window/averaging
+  window; Wind Direction: device address/direction offset/averaging window)
+  with FC06 write-back. Only one of the two can poll at a time in v1 — same
+  "one target at a time" constraint as the original combined panel, just now
+  expressed as "one *tab*, not one *field of a shared panel*" (§9). Starting
+  one tab's poll silently stops the other's if it was running; the GUI
+  corrects the other tab's Start/Stop buttons on the next status update
+  rather than leaving them showing a stale "running" state.
 - **Register Explorer** *(new — generic tool)* — manual single-shot request:
   address, FC (03/04/06/16), start register entered as a **raw 0-based
   address by default** (canonical, §5), with an optional Modicon 5-digit
   entry mode ("40003") that converts to raw at input time and is never
-  stored or displayed as the canonical value, count/value(s), interpretation
-  (uint16/int16/uint32/int32, byte/word order, scale factor). Decoded result
-  + raw hex shown side by side. This is the tool that survives DUT register
-  map changes without a firmware rebuild on the tester side. Saved/favourite
-  queries are backlog, not v1 (§9) — every query is typed fresh for now.
+  stored or displayed as the canonical value, plus count/value(s). Shipped
+  simpler than originally sketched here: no uint16/int16/uint32/int32 or
+  byte/word-order interpretation modes, just raw register values — every
+  register on the DUT so far is a plain unsigned 16-bit value (§5), so
+  that layer wasn't needed and wasn't built (avoids the "don't design for
+  hypothetical future requirements" trap). Decoded result + raw hex shown
+  side by side. This is the tool that survives DUT register map changes
+  without a firmware rebuild on the tester side. Saved/favourite queries
+  are backlog, not v1 (§9) — every query is typed fresh for now.
 - **Modbus Log** — same concept as the template (scrolling TX/RX frames, hex
-  + decoded, timestamp, clear button), just both directions now originate
-  from us.
-- **WiFi Settings** — unchanged from template.
+  + decoded, clear button), just both directions now originate from us.
+  Pinned to the bottom of the page, doesn't move into the tab layout
+  (2026-07-02 GUI restructure, same reasoning as Status above). GUI
+  timestamps are `HH:MM:SS` (wall-clock local time once NTP is synced,
+  uptime-based otherwise) and the table caps at the last 50 entries —
+  raised from an original 30/32 once real bench use showed that was too
+  short to keep a whole scan or a short multi-query session in view at
+  once.
+- **System Settings** — WiFi (SSID/password), NTP server, manual time, and
+  Modbus timeout/retries, one tab. Grew from the template's WiFi-only
+  Settings section once Modbus timeout/retries needed a home too; the
+  Modbus fields pre-populate from the live status stream (NVS-backed)
+  instead of loading empty, so a bench user can see the current values
+  before deciding whether to change them.
 
 ### WebSocket push — `type`-routed, matching `app.js`'s existing message router
 
@@ -337,19 +378,29 @@ is gone, §3); `status`, `log`, and `log_clear` carry over unchanged; `scan`
 and `wind` are new:
 
 ```json
-// type: "status" — ~1 s cadence, same as template
+// type: "status" — ~1 s cadence, same as template. fw_version and
+// mb_timeout_ms/mb_retries added 2026-07-02 (System Settings pre-fill,
+// footer version display) — this example had drifted out of sync with
+// the real payload before that; keep it matched going forward.
 { "type": "status",
+  "fw_version": "0.4.0",
   "wifi_mode": "STA", "wifi_ssid": "...", "wifi_ip": "...",
   "ntp_synced": true, "local_time": "2026-07-01T14:30:45+02:00",
+  "uptime_s": 4021, "mb_timeout_ms": 200, "mb_retries": 1,
   "bus": { "crc_errors": 0, "timeouts": 2, "last_exception": null } }
 
 // type: "scan" — pushed while a Bus Scanner sweep is running
 { "type": "scan", "current_addr": 37, "range_end": 247, "found": [1, 31, 44] }
 
-// type: "wind" — pushed while the Wind Test panel is polling
-{ "type": "wind", "addr": 31, "dir_instant_deg": 183.4, "dir_avg_deg": 181.0,
+// type: "wind" — pushed while either Wind Speed or Wind Direction is
+// polling (only one at a time, §9); "sensor_type" tags which tab it's
+// for, and only that type's own fields are present (2026-07-02 split —
+// this used to be one shape carrying both sensor's fields at once)
+{ "type": "wind", "sensor_type": "speed", "has_data": true,
   "speed_instant_ms": 4.2, "speed_avg_ms": 3.9, "raw_pulses": 27,
-  "last_ok": true, "age_ms": 420 }
+  "age_ms": 420 }
+{ "type": "wind", "sensor_type": "direction", "has_data": true,
+  "dir_instant_deg": 183.4, "dir_avg_deg": 181.0, "age_ms": 420 }
 
 // type: "log" / "log_clear" — unchanged from template
 ```
@@ -365,8 +416,9 @@ and `wind` are new:
 | `mb_timeout_ms` | u16 | 200 | Response timeout |
 | `mb_retries` | u8 | 1 | Retry count before marking a transaction failed |
 | `scan_range_start` / `scan_range_end` | u8 | 1 / 247 | Last-used scan range |
-| `wind_test_addr` | u8 | 31 | Last-used Wind Test target |
-| `wind_poll_interval_ms` | u32 | 1000 | Wind Test poll cadence |
+| `wind_speed_addr` | u8 | 30 | Last-used Wind Speed target (was one shared `wind_test_addr` before the 2026-07-02 split) |
+| `wind_dir_addr` | u8 | 31 | Last-used Wind Direction target |
+| `wind_poll_interval_ms` | u32 | 1000 | Poll cadence, shared by both wind tabs — no reason a bench tool needs a different cadence per sensor type |
 
 ## 8. Development sequence
 
@@ -376,7 +428,8 @@ Adapted from the template's 13-step sequence:
 2. Modbus master core: CRC16, frame builder, timeout/retry (§6.3)
 3. **Bus Scanner** (replaces "modbus slave skeleton")
 4. **Register Explorer** generic read/write (replaces FG6485A/S200 emulation steps)
-5. **Wind Test** panel wired to the current §5 register map
+5. **Wind Speed / Wind Direction** panels wired to the current §5 register
+   maps (shipped as one combined "Wind Test" panel at first, split 2026-07-02)
 6. NVS + settings persistence
 7. WiFi manager (AP/STA, mDNS) — straight port
 8. Web interface shell (HTTP, WebSocket, page routing) — straight port
@@ -399,9 +452,26 @@ Adapted from the template's 13-step sequence:
       (§4.1, §6.2, §8) — no LCD involved.
 - [x] PlatformIO board id — confirmed `m5stack-atoms3` against PlatformIO's
       espressif32 board registry
-- [x] Multi-device scanning — **decision: deferred to v2.** v1 Wind Test
-      targets one address at a time; revisit a side-by-side dashboard once
-      the single-device flow is proven on the bench.
+- [x] Multi-device scanning — **decision: deferred to v2.** Still true after
+      the wind-speed/direction split below: each tab targets one address at
+      a time, and only one tab polls at all at any given moment (not two
+      simultaneously) — splitting into two tabs is not the same thing as
+      the deferred multi-device dashboard, which would mean several devices
+      live on screen at once. Revisit a real dashboard once the
+      single-device flow is proven on the bench.
+- [x] Wind speed/direction as one combined panel vs. two — **decision
+      (2026-07-02): split into two.** Originally modelled as one Wind Test
+      panel reading a single device's combined 5-input/4-holding register
+      block (§5's old table). Reading the DUT's own
+      `windmeters-modbus-interface/design/scratchBook.md` more closely
+      showed speed and direction are separate physical units sharing one
+      PCB/firmware source, distinguished at build time and by slave address
+      (solder-jumper selectable) — not one device exposing both sensors'
+      registers together. Corrected §5's register tables (now two maps, not
+      one) and §7's GUI description (two tabs, not one panel) to match.
+      `wind_poll`'s core, its FreeRTOS task, and the `/wind/*` endpoints are
+      all now parameterised on a `wind_sensor_type_t`, each type only ever
+      touching the registers its own firmware implements.
 - [x] Register Explorer "favourites" — **decision: backlog**, not v1.
 - [x] DUT scratchBook TODOs (e.g. low-speed cutoff register 40005) —
       **decision: reference only.** This doc links to

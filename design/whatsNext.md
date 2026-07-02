@@ -5,7 +5,7 @@
 | Document     | Next Phases                               |
 | Project      | Windmeters Modbus Interface Tester        |
 | Date         | 2026-07-02 (updated)                      |
-| Status       | Phase 2.5 done; Phase 3 eight-of-nine done (INT-01/02/03/04/06/07/08/09 — §3.2); only INT-05 remains, blocked on the DUT firmware (Phase 4) |
+| Status       | Phase 2.5 done; Phase 3 eight-of-nine done (INT-01/02/03/04/06/07/08/09 — §3.2); only INT-05 remains, blocked on the DUT firmware (Phase 4). Wind speed/direction split + GUI restructure done same day, after Phase 3's testing — see §2.5 |
 | Related docs | `design/progress.md` (what's done so far), `design/api.md` (Phase 2.5's spec), `design/completeRealisationPlan.md` §4 (Part C — Integration Test, the source table Phase 3 below reproduces), `design/realisationPlan.md` §4 (bring-up sequence, steps 3–5), `memory/gotcha-log.md` |
 
 ---
@@ -72,6 +72,66 @@ loop found via hardware testing: `progress.md` §7. Summary:
 - This is now the primary tool for driving Phase 3 below — a scan, a read,
   a write are all one HTTP call instead of clicking through the web UI for
   each bench check.
+
+---
+
+## 2.5 Wind speed/direction split + GUI restructure (2026-07-02) — DONE
+
+Done after Phase 3's testing (§3) wrapped up, prompted by reading the DUT's
+own `windmeters-modbus-interface/design/scratchBook.md` more closely: wind
+speed and wind direction are physically separate units sharing one PCB/
+firmware source, not one device exposing both sensors' registers together.
+Full detail: `scratchbook.md` §5/§9, `completeRealisationPlan.md` §2/§3
+TASK-WIND, `api.md` §5.5.
+
+- **Backend split:** `wind_poll`'s decode/config core, `wind_poll_task`, and
+  the `/wind/*` + `/api/v1/wind` endpoints are all now parameterised on a
+  `wind_sensor_type_t` (`speed`/`direction`), each type only ever touching
+  the registers its own firmware implements. Separate NVS keys
+  (`wind_speed_addr`/`wind_dir_addr`, replacing one shared `wind_test_addr`).
+  Only one type polls at a time — same constraint as before, now per-type
+  instead of per-field.
+- **GUI restructure:** Status pinned top, Modbus Log pinned bottom (both
+  always visible), Bus Scanner/Wind Speed/Wind Direction/Register Explorer/
+  System Settings moved into a tab bar between them. Bus Scanner's presets
+  row removed (S200/address 44 permanently out of scope, and the remaining
+  windmeter presets stopped pulling their weight once each wind tab has its
+  own correct default address). System Settings' Modbus Timeout/Retries now
+  pre-populate from the live status stream (NVS-backed) instead of loading
+  empty.
+- **Modbus Log:** GUI timestamps changed from raw milliseconds to
+  `HH:MM:SS`; display cap raised from 30 to 50 entries (ring buffer
+  capacity likewise raised from 32 to 50, `MB_LOG_CAPACITY`).
+- **Real bug found and fixed while restructuring the log, not part of the
+  original ask:** the WebSocket broadcaster only ever looked at the single
+  newest log entry once per second. `mb_master_process()` logs a TX entry
+  immediately followed by an RX entry sharing the same timestamp — for a
+  fast one-off transaction (the common case for a Register Explorer query)
+  the TX almost always got silently skipped, since RX became "the newest
+  entry" before the next broadcast tick ever looked. Not a data-loss bug —
+  both entries were always correctly in the ring buffer, so `GET
+  /api/v1/log` was never affected — only the live WebSocket tail the GUI
+  actually watches. Fixed with a monotonic `mblog_total_appended()` counter
+  so the broadcaster catches up on every entry since its last tick, not
+  just the newest one. Verified on hardware: a single query now reliably
+  shows both TX and RX (previously intermittent), and a 3-query rapid burst
+  loses none of the 3 TX entries.
+- **Incidental fix, found while updating this documentation, not part of
+  the original ask:** `GET /api/v1/spec`'s `dut_register_snapshot` field
+  (`web_server_task.cpp`'s hand-maintained `DUT_REGISTER_SNAPSHOT_JSON`
+  constant) still described the old combined 5-input/4-holding map after
+  the split landed — nothing regenerates that constant automatically, and
+  it was missed at the time. An LLM or script bootstrapping a session from
+  `/api/v1/spec` alone (`api.md` §1.1's whole reason for that endpoint
+  existing) would have gotten a register layout that no longer exists.
+  Fixed to the same `wind_speed`/`wind_direction`-keyed shape as the rest
+  of the split (`api.md` §5.1).
+- **142/142 native tests pass** (up from 91 at Phase 2.5; new coverage for
+  the type-aware wind core, the log broadcaster's catch-up counter, and the
+  enriched WS status payload). Hardware build, flash (firmware + filesystem),
+  and live-device verification done for every piece above — see
+  `progress.md` for the session's full verification log once it's updated
+  to match.
 
 ---
 
@@ -225,20 +285,24 @@ here rather than silently assumed.
 **Blocked on:** `windmeters-modbus-interface`'s firmware implementing its
 register map. `software/firmware/src/main.c` is still scaffolding as of
 this writing (`git log` on that repo: HEAD = `3427df2 First scaffolding`)
-— there is nothing to test the Wind Test decode against yet.
+— there is nothing to test the Wind Speed/Direction decode against yet.
 
-Once unblocked:
+Once unblocked, this now means **two** physical units to verify (§2.5),
+not one:
 
-1. Flash the DUT with its own register-map firmware.
+1. Flash both DUT variants (or one, jumpered between addresses) with their
+   register-map firmware.
 2. Re-run `realisationPlan.md` §4 step 5: repeat bring-up steps 3/4 against
    the real DUT instead of the emulator.
-3. Run **INT-05** (Wind Test decode accuracy) — the first time
-   `wind_poll`'s ×10 scale-factor decode is checked against real register
-   values instead of hand-constructed native-test fixtures.
+3. Run **INT-05** (Wind Speed and Wind Direction decode accuracy — two
+   passes, one per type) — the first time `wind_poll`'s ×10 scale-factor
+   decode is checked against real register values instead of
+   hand-constructed native-test fixtures.
 4. Run the DUT-specific half of **INT-06** — holding-register config
-   write-back (device address, direction offset, measurement window,
-   averaging window) via the Wind Test panel's config form, not just the
-   emulator's FG6485A stand-in.
+   write-back via each type's own tab (Wind Speed: device address/
+   measurement window/averaging window; Wind Direction: device address/
+   direction offset/averaging window), not just the emulator's FG6485A
+   stand-in.
 5. **Regression pass whenever the DUT's register map changes upstream**
    (`scratchbook.md` §8 step 13). The register map was noted as "4 commits
    old and still moving" when this project started — re-check
@@ -260,7 +324,7 @@ verification:
 |---|---|---|
 | ~~WiFi settings require a reboot to take effect~~ | Discovered during Phase 2 (TASK-WEB) | **Fixed 2026-07-02** — turned out to be a real INT-02 failure, not just polish (§3.2). `/config/wifi` now calls `ESP.restart()` after saving, instead of leaving new credentials unused until an unrelated reboot happened to apply them |
 | Bus scan uses the same `mb_timeout_ms` as everything else — no scan-specific faster timeout | `completeRealisationPlan.md` §3, TASK-SCAN | Worst case ~1 minute for an empty 1–247 sweep; acceptable for v1, candidate refinement if it proves annoying in practice |
-| Multi-device Wind Test dashboard | `scratchbook.md` §9 — explicit v2 decision | v1 intentionally targets one address at a time |
+| Multi-device Wind dashboard (several devices live on screen at once) | `scratchbook.md` §9 — explicit v2 decision | v1 intentionally targets one address at a time per type. Not the same thing as §2.5's Wind Speed/Direction tab split — two tabs for two sensor *types*, still one active poll target |
 | Register Explorer saved queries | `scratchbook.md` §9 — explicit backlog decision | Not needed to validate the DUT |
 
 None of these block Phase 3 or Phase 4. Revisit after real-DUT verification,
@@ -271,9 +335,10 @@ which were theoretical concerns.
 
 ## 6. Housekeeping
 
-- Phase 1+2 work is committed (`9393b53`). `design/api.md` (Phase 2.5's
-  spec, elaborated and updated 2026-07-02) and this file's own edits are
-  the next things to review and commit.
+- Phase 1/2/2.5, the Phase 3 integration-test fixes, and §2.5's wind
+  speed/direction split + GUI restructure are all committed (`5affff4`).
+  The log-broadcast TX-drop fix (§2.5) and this documentation pass are
+  staged, not yet committed — next things to review.
 - `memory/gotcha-log.md` is the first thing to check if Phase 3 turns up
   something that looks like a hardware fault — several "looked like a
   wiring problem, wasn't" cases already happened once this session (the

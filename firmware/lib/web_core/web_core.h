@@ -50,13 +50,15 @@ int web_core_build_wind_json(char *out, size_t out_size, wind_sensor_type_t type
 /**
  * @brief Build the `type:"status"` WebSocket payload.
  *
- * Includes the configured @p mb_timeout_ms / @p mb_retries (not just bus
- * health counters) so the GUI's System Settings tab can pre-populate its
- * Modbus Timeout/Retries fields from the live status stream instead of
- * loading empty — same values the API's /api/v1/status exposes, named the
- * same way, for the same reason.
+ * Includes @p fw_version (the footer's version display reads this — GUI
+ * restructure, 2026-07-02) and the configured @p mb_timeout_ms /
+ * @p mb_retries (not just bus health counters) so the GUI's System
+ * Settings tab can pre-populate its Modbus Timeout/Retries fields from the
+ * live status stream instead of loading empty — same values the API's
+ * /api/v1/status exposes, named the same way, for the same reason.
  */
 int web_core_build_status_json(char *out, size_t out_size,
+                                const char *fw_version,
                                 const char *wifi_mode, const char *wifi_ssid,
                                 const char *wifi_ip, int8_t wifi_rssi,
                                 bool ntp_synced, const char *local_time_iso,
@@ -149,6 +151,7 @@ int web_core_build_api_spec_json(char *out, size_t out_size, const char *dut_reg
 
 /** @brief Build `GET /api/v1/status`'s JSON (design/api.md §5.2) — a differently-shaped, machine-oriented sibling of the `type:"status"` WebSocket payload above. */
 int web_core_build_api_status_json(char *out, size_t out_size,
+                                    const char *fw_version,
                                     uint32_t uptime_s,
                                     const char *wifi_mode, const char *wifi_ssid,
                                     const char *wifi_ip, int8_t wifi_rssi,

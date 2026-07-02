@@ -6,6 +6,7 @@ static mb_log_entry_t *s_buf      = 0;
 static size_t           s_capacity = 0;
 static size_t           s_head     = 0; /**< Index of the oldest entry. */
 static size_t           s_count    = 0; /**< Number of valid entries. */
+static uint32_t         s_total_appended = 0; /**< Ever-growing; see mblog_total_appended(). */
 
 void mblog_init(size_t capacity)
 {
@@ -16,6 +17,7 @@ void mblog_init(size_t capacity)
     s_capacity = capacity;
     s_head     = 0;
     s_count    = 0;
+    s_total_appended = 0;
     if (capacity > 0) {
         s_buf = (mb_log_entry_t *)malloc(sizeof(mb_log_entry_t) * capacity);
     }
@@ -35,6 +37,7 @@ void mblog_append(const mb_log_entry_t *entry)
          * entry was just overwritten — advance head to the next-oldest. */
         s_head = (s_head + 1) % s_capacity;
     }
+    s_total_appended++;
 }
 
 size_t mblog_get_recent(mb_log_entry_t *out, size_t max_count)
@@ -56,4 +59,9 @@ void mblog_clear(void)
 size_t mblog_count(void)
 {
     return s_count;
+}
+
+uint32_t mblog_total_appended(void)
+{
+    return s_total_appended;
 }

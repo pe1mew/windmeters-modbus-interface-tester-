@@ -142,9 +142,10 @@ void test_status_json_no_exception(void)
     health.has_exception = false;
 
     char buf[384];
-    web_core_build_status_json(buf, sizeof(buf), "STA", "test-network", "192.168.20.185", -45,
+    web_core_build_status_json(buf, sizeof(buf), "0.4.0", "STA", "test-network", "192.168.20.185", -45,
                                 true, "2026-07-01T17:45:21", 12345, 200, 1, &health);
 
+    TEST_ASSERT_TRUE(strstr(buf, "\"fw_version\":\"0.4.0\"") != NULL);
     TEST_ASSERT_TRUE(strstr(buf, "\"wifi_mode\":\"STA\"") != NULL);
     TEST_ASSERT_TRUE(strstr(buf, "\"wifi_rssi\":-45") != NULL);
     TEST_ASSERT_TRUE(strstr(buf, "\"ntp_synced\":true") != NULL);
@@ -163,7 +164,7 @@ void test_status_json_with_exception(void)
     health.last_exception = 0x02;
 
     char buf[384];
-    web_core_build_status_json(buf, sizeof(buf), "AP", "", "192.168.4.1", 0,
+    web_core_build_status_json(buf, sizeof(buf), "0.4.0", "AP", "", "192.168.4.1", 0,
                                 false, "1970-01-01T00:00:00", 10, 200, 1, &health);
     TEST_ASSERT_TRUE(strstr(buf, "\"last_exception\":2") != NULL);
     TEST_ASSERT_TRUE(strstr(buf, "\"ntp_synced\":false") != NULL);
@@ -350,12 +351,12 @@ void test_api_status_json_shape(void)
     health.timeouts = 5;
 
     char buf[512];
-    web_core_build_api_status_json(buf, sizeof(buf), 4021,
+    web_core_build_api_status_json(buf, sizeof(buf), "0.4.0", 4021,
         "STA", "bench", "192.168.1.42", -61,
         true, 9600, 200, 1, &health, false, true);
 
     TEST_ASSERT_EQUAL_STRING(
-        "{\"ok\":true,\"uptime_s\":4021,"
+        "{\"ok\":true,\"fw_version\":\"0.4.0\",\"uptime_s\":4021,"
         "\"wifi\":{\"mode\":\"STA\",\"ssid\":\"bench\",\"ip\":\"192.168.1.42\",\"rssi\":-61},"
         "\"ntp_synced\":true,"
         "\"modbus\":{\"baud\":9600,\"timeout_ms\":200,\"retries\":1,\"crc_errors\":2,\"timeouts\":5,\"last_exception\":null},"
@@ -371,7 +372,7 @@ void test_api_status_json_with_exception(void)
     health.last_exception = 2;
 
     char buf[512];
-    web_core_build_api_status_json(buf, sizeof(buf), 0, "AP", "", "192.168.4.1", 0,
+    web_core_build_api_status_json(buf, sizeof(buf), "0.4.0", 0, "AP", "", "192.168.4.1", 0,
         false, 9600, 200, 1, &health, true, false);
 
     TEST_ASSERT_TRUE(strstr(buf, "\"last_exception\":2") != NULL);

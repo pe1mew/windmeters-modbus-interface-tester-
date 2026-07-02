@@ -24,6 +24,14 @@
 #define STATUS_BROADCAST_INTERVAL_MS 1000u
 #define EXPLORER_REPLY_TIMEOUT_MS    2000u
 
+/* platformio.ini's [env:windmeterTester] build_flags sets this; fallback
+ * so a build that somehow skips it still compiles instead of failing on
+ * an undefined macro, and reports something visibly wrong rather than a
+ * plausible-looking stale number. */
+#ifndef FIRMWARE_VERSION
+#define FIRMWARE_VERSION "0.0.0-unversioned"
+#endif
+
 static AsyncWebServer s_server(80);
 static AsyncWebSocket s_ws("/ws");
 
@@ -152,6 +160,7 @@ static void broadcast_status(void)
 
     char json[384];
     web_core_build_status_json(json, sizeof(json),
+                                FIRMWARE_VERSION,
                                 wifi.mode_str, wifi.ssid, wifi.ip, wifi.rssi,
                                 ntp_is_synced(), time_buf,
                                 (uint32_t)(millis() / 1000),
@@ -184,36 +193,57 @@ static void broadcast_wind_if_active(void)
     s_ws.textAll(json);
 }
 
-static uint32_t s_last_broadcast_log_ts = 0xFFFFFFFFu;
-
-static void broadcast_new_log_entry(void)
+static void broadcast_one_log_entry(const mb_log_entry_t *entry)
 {
-    mb_log_entry_t entry;
-    if (mblog_get_recent(&entry, 1) == 0) {
-        return;
-    }
-    if (entry.timestamp_ms == s_last_broadcast_log_ts) {
-        return; /* nothing new since last tick */
-    }
-    s_last_broadcast_log_ts = entry.timestamp_ms;
-
     char hex[3 * 256] = {0};
     size_t hex_len = 0;
-    for (uint8_t i = 0; i < entry.raw_len && hex_len + 3 < sizeof(hex); i++) {
-        hex_len += (size_t)snprintf(hex + hex_len, sizeof(hex) - hex_len, "%02X ", entry.raw[i]);
+    for (uint8_t i = 0; i < entry->raw_len && hex_len + 3 < sizeof(hex); i++) {
+        hex_len += (size_t)snprintf(hex + hex_len, sizeof(hex) - hex_len, "%02X ", entry->raw[i]);
     }
 
     /* HH:MM:SS for the GUI table — /api/v1/log keeps its own raw-ms
      * "clock":"uptime" contract for machine clients (design/api.md §3);
      * this is the human-display sibling, GUI-side only per that scoping. */
     char ts_buf[12];
-    web_core_format_uptime_hhmmss(ts_buf, sizeof(ts_buf), entry.timestamp_ms);
+    web_core_format_uptime_hhmmss(ts_buf, sizeof(ts_buf), entry->timestamp_ms);
 
     char json[512];
     snprintf(json, sizeof(json),
              "{\"type\":\"log\",\"ts\":\"%s\",\"dir\":\"%s\",\"hex\":\"%s\",\"summary\":\"%s\"}",
-             ts_buf, entry.is_tx ? "TX" : "RX", hex, entry.summary);
+             ts_buf, entry->is_tx ? "TX" : "RX", hex, entry->summary);
     s_ws.textAll(json);
+}
+
+static uint32_t s_last_broadcast_total = 0;
+
+static void broadcast_new_log_entries(void)
+{
+    /* mb_master_process() logs a TX entry immediately followed by an RX
+     * entry sharing the same timestamp_ms — looking only at the single
+     * newest entry (the old approach) silently skipped the TX whenever
+     * both landed inside one broadcast tick, which is the common case for
+     * a one-off request (e.g. Register Explorer). Diff the monotonic
+     * total against what was last broadcast so every entry gets caught,
+     * oldest to newest so the GUI's prepend-to-top ordering comes out
+     * right. */
+    uint32_t total = mblog_total_appended();
+    if (total == s_last_broadcast_total) {
+        return; /* nothing new since last tick */
+    }
+    uint32_t new_count = total - s_last_broadcast_total;
+    if (new_count > MB_LOG_CAPACITY) {
+        new_count = MB_LOG_CAPACITY; /* rest were overwritten before we could send them */
+    }
+    s_last_broadcast_total = total;
+
+    /* Static: MB_LOG_CAPACITY entries (~16 KB) would blow this task's
+     * 6144-byte stack (xTaskCreatePinnedToCore below) as a local array.
+     * Single-owner (only broadcast_task_fn's one task ever calls this). */
+    static mb_log_entry_t s_pending[MB_LOG_CAPACITY];
+    size_t got = mblog_get_recent(s_pending, new_count); /* newest first */
+    for (size_t i = got; i > 0; i--) {
+        broadcast_one_log_entry(&s_pending[i - 1]);
+    }
 }
 
 static void broadcast_task_fn(void * /*pvParameters*/)
@@ -222,7 +252,7 @@ static void broadcast_task_fn(void * /*pvParameters*/)
         broadcast_status();
         broadcast_scan_if_active();
         broadcast_wind_if_active();
-        broadcast_new_log_entry();
+        broadcast_new_log_entries();
         vTaskDelay(pdMS_TO_TICKS(STATUS_BROADCAST_INTERVAL_MS));
     }
 }
@@ -556,20 +586,32 @@ static void register_api_v1_endpoints(void)
     /* Hand-curated snapshot of scratchbook.md §5's current register map —
      * not derived from wind_poll.h, since that map is explicitly
      * provisional ("still moving") and this is meant to help a client
-     * bootstrap, not be the source of truth. Update by hand if §5 changes. */
+     * bootstrap, not be the source of truth. Update by hand if §5 changes.
+     *
+     * Wind speed and wind direction are separate physical units at
+     * separate addresses (wind_poll.h) — this was a single combined
+     * 5-input/4-holding map before that split and went stale when the
+     * split landed (2026-07-02), since nothing re-generates this constant
+     * automatically. Keyed by sensor_type ("speed"/"direction") to match
+     * the same tag used throughout the WS/API wind payloads. */
     static const char DUT_REGISTER_SNAPSHOT_JSON[] =
-        "{\"input_registers\":["
-        "{\"addr\":0,\"name\":\"wind_dir_instant\",\"unit\":\"0.1 deg\"},"
-        "{\"addr\":1,\"name\":\"wind_speed_instant\",\"unit\":\"0.1 m/s\"},"
-        "{\"addr\":2,\"name\":\"wind_dir_avg\",\"unit\":\"0.1 deg\"},"
-        "{\"addr\":3,\"name\":\"wind_speed_avg\",\"unit\":\"0.1 m/s\"},"
-        "{\"addr\":4,\"name\":\"raw_pulses\",\"unit\":\"pulses/interval\"}"
+        "{\"wind_speed\":{\"input_registers\":["
+        "{\"addr\":0,\"name\":\"speed_instant\",\"unit\":\"0.1 m/s\"},"
+        "{\"addr\":1,\"name\":\"speed_avg\",\"unit\":\"0.1 m/s\"},"
+        "{\"addr\":2,\"name\":\"raw_pulses\",\"unit\":\"pulses/interval\"}"
+        "],\"holding_registers\":["
+        "{\"addr\":0,\"name\":\"device_addr\",\"range\":[1,247]},"
+        "{\"addr\":1,\"name\":\"measurement_window_ms\"},"
+        "{\"addr\":2,\"name\":\"averaging_window_s\"}"
+        "]},"
+        "\"wind_direction\":{\"input_registers\":["
+        "{\"addr\":0,\"name\":\"dir_instant\",\"unit\":\"0.1 deg\"},"
+        "{\"addr\":1,\"name\":\"dir_avg\",\"unit\":\"0.1 deg\"}"
         "],\"holding_registers\":["
         "{\"addr\":0,\"name\":\"device_addr\",\"range\":[1,247]},"
         "{\"addr\":1,\"name\":\"dir_offset\",\"unit\":\"0.1 deg\"},"
-        "{\"addr\":2,\"name\":\"measurement_window_ms\"},"
-        "{\"addr\":3,\"name\":\"averaging_window_s\"}"
-        "]}";
+        "{\"addr\":2,\"name\":\"averaging_window_s\"}"
+        "]}}";
 
     s_server.on("/api/v1/spec", HTTP_GET, [](AsyncWebServerRequest *request) {
         char buf[2048];
@@ -581,6 +623,7 @@ static void register_api_v1_endpoints(void)
         wifi_status_t wifi = wifi_manager_get_status();
         char buf[512];
         web_core_build_api_status_json(buf, sizeof(buf),
+            FIRMWARE_VERSION,
             (uint32_t)(millis() / 1000),
             wifi.mode_str, wifi.ssid, wifi.ip, wifi.rssi,
             ntp_is_synced(),

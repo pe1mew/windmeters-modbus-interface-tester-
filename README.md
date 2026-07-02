@@ -13,22 +13,35 @@ tool initiates them as a master.
 
 ## What it does
 
+The web UI has Status pinned at the top and the Modbus Log pinned at the
+bottom; everything else lives in a tab bar between them.
+
 - **Bus Scanner** — sweep a Modbus slave address range (default 1–247) over
   RS-485 and report which addresses respond, with which function codes, and
   round-trip time. Live progress is streamed to the web UI over WebSocket.
 - **Register Explorer** — manual single-shot FC03/FC04/FC06/FC16 requests
-  against any address and register, with selectable interpretation
-  (uint16/int16/uint32/int32, byte/word order, scale factor). Raw hex and the
-  decoded value are shown side by side. This is the tool that survives DUT
+  against any address and register, entered as either a raw 0-based address
+  or a Modicon-style number (30001/40001). Raw hex and the decoded register
+  values are shown side by side. This is the tool that survives DUT
   register-map changes without a firmware rebuild on the tester side.
-- **Wind Test** — live polling of the DUT's wind speed/direction input
-  registers with decoded values (compass dial for direction, numeric for
-  speed), plus a form to write the DUT's calibration/config holding registers
-  (device address, direction offset, measurement/averaging windows).
-- **Modbus Log** — scrolling TX/RX frame log (hex + decoded, timestamped via
-  NTP) with a clear button.
-- **WiFi / Status** — AP/STA manager with auto-switch, mDNS, NTP sync, and an
-  RGB status LED (idle / scanning / valid-frame / error).
+- **Wind Speed** / **Wind Direction** — two tabs, not one: the DUT ships as
+  two physically separate units (cup anemometer vs. wind-vane potentiometer)
+  at separate slave addresses, so each gets its own tab with a register-map
+  reference table, live decoded values, and a form to write that type's own
+  calibration/config holding registers. Only one of the two polls at a time.
+- **System Settings** — WiFi (SSID/password), NTP server, manual time, and
+  Modbus timeout/retries (pre-populated from the live device config, not
+  left empty).
+- **Modbus Log** — scrolling TX/RX frame log (hex + decoded, `HH:MM:SS`
+  timestamps, last 50 entries) with a clear button.
+- **Status** — WiFi mode/SSID/IP/RSSI, NTP sync state, bus health counters,
+  uptime, plus an RGB status LED on the device itself (idle / scanning /
+  valid-frame / error).
+- **Machine API** (`/api/v1/*`, [design/api.md](design/api.md)) — a
+  parallel JSON-over-HTTP API for scripts, CI, or an LLM to drive the same
+  functionality without a browser: one self-contained request/response per
+  Modbus transaction, raw TX/RX frames in every response, and a
+  self-describing `GET /api/v1/spec` endpoint.
 
 ## Hardware
 
@@ -83,7 +96,7 @@ pio test -e native
 ```
 
 The native environment compiles the libraries against mock transports and
-backends (91 tests across 10 suites at the time of writing).
+backends (142 tests across 10 suites at the time of writing).
 
 ## Architecture notes
 

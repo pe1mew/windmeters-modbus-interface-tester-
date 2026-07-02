@@ -47,3 +47,21 @@ void mblog_clear(void);
 
 /** @brief Number of entries currently held. */
 size_t mblog_count(void);
+
+/**
+ * @brief Total number of entries ever appended, monotonically increasing —
+ * unlike mblog_count() this keeps growing past the ring buffer wrapping,
+ * and is NOT reset by mblog_clear() (only by mblog_init()).
+ *
+ * A consumer that polls periodically (web_server_task's WS broadcast) needs
+ * this instead of comparing timestamps: one mb_master_process() call logs
+ * a TX entry immediately followed by an RX entry sharing the *same*
+ * timestamp_ms, so "is this newer than the last one I sent" can't be
+ * answered from timestamps alone, and looking only at mblog_get_recent(_,1)
+ * silently skips the TX entirely whenever both land inside one poll tick
+ * (which is the common case for a single one-off request, e.g. the
+ * Register Explorer). Diffing this counter against a remembered previous
+ * value tells the caller exactly how many new entries to pull with
+ * mblog_get_recent() to catch up, TX included.
+ */
+uint32_t mblog_total_appended(void);

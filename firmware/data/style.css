@@ -124,6 +124,12 @@ button.btn-sm { padding: 3px 10px; font-size: .8rem; }
 /* ── Misc ────────────────────────────────────────────────────────── */
 hr { border: none; border-top: 1px solid #2a2a4a; margin: .75rem 0; }
 .hint { font-size: .8rem; color: var(--muted); margin-top: .4rem; }
+/* Wind Speed/Direction's "only one sensor can poll" hint sits directly above
+   the live-value tiles — give it the same .75rem breathing room used
+   elsewhere (h2's margin-bottom, hr's margin) instead of butting straight
+   into the grid. Scoped to hint-immediately-before-a-grid4 so Bus Scanner's
+   progress hint (followed by a table, not a grid) is unaffected. */
+.hint + .grid4 { margin-top: .75rem; }
 code { background: #0d1b2a; padding: 1px 4px; border-radius: 3px; }
 
 /* ── Tabs ────────────────────────────────────────────────────────── */
@@ -227,3 +233,7 @@ footer a {
   text-decoration: none;
 }
 footer a:hover { color: var(--fg); }
+.fw-version {
+  font-family: monospace;
+  opacity: .7;
+}

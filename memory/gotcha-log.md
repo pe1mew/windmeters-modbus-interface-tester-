@@ -82,6 +82,47 @@ specifically (not a general read/write failure — writes and immediate
 reads within the same boot session can still coincidentally look fine
 depending on caching), check the key length first.
 
+## Firmware — WebSocket live-update patterns
+
+**Polling only "the single newest item" between broadcast ticks silently
+drops anything else appended in between — even though it's still safely in
+the source buffer.** The Modbus log's WebSocket broadcaster called
+`mblog_get_recent(&entry, 1)` once per second and only ever pushed that one
+entry to clients. `mb_master_process()` logs a TX entry immediately
+followed by an RX entry sharing the *same* `timestamp_ms` — for a single
+fast transaction (any one-off Register Explorer query), RX became "the
+newest entry" before the broadcaster's next tick ever looked, so the TX
+was skipped essentially every time. Not a data-loss bug — `mblog_append()`
+always correctly stored both, so `GET /api/v1/log` (which reads the whole
+ring buffer) was never affected — only the *live* WebSocket tail was
+wrong, which made it easy to miss: the log looked complete on a fresh page
+load, just quietly lost entries in real time. A bare timestamp comparison
+can't fix this either, since TX/RX share one — needed a real monotonic
+"total ever appended" counter (`mblog_total_appended()`) so the broadcaster
+can compute exactly how many entries to catch up on, not just "is there
+something new." General lesson: any periodic-poll broadcaster sitting on
+top of a buffer that can receive more than one write per producer-call
+needs to diff against a counter, not compare against "the current latest
+value," or it will silently drop everything except whatever happened to be
+newest at each poll instant.
+
+**A hand-maintained constant describing a data shape (register maps, JSON
+schemas, …) will drift the moment the real shape changes, with nothing to
+catch it.** `web_server_task.cpp`'s `DUT_REGISTER_SNAPSHOT_JSON` — the
+`GET /api/v1/spec` payload's `dut_register_snapshot` field — was a literal
+string mirroring the wind register map, with its own comment saying
+"update by hand if §5 changes." §5 changed (the 2026-07-02 speed/direction
+split) and this constant didn't, because nothing forced it to; it kept
+compiling and kept returning valid-looking JSON, just JSON describing
+registers that no longer existed on either sensor type. No test caught it
+either — it's a literal in Arduino-only code, outside this project's
+tested/untested split (`web_core` is tested, `web_server_task.cpp`'s route
+bodies aren't). Found only by manually re-deriving what the endpoint
+*should* return while updating documentation, not by anything automated.
+Worth a periodic manual check for any other hand-maintained "snapshot of
+the real thing" constants in this codebase, since this class of drift is
+structurally invisible to both the compiler and the test suite.
+
 ## Toolchain — HTTP verification from PowerShell
 
 **`Invoke-WebRequest` without `-UseBasicParsing` can fail with "PowerShell

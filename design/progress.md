@@ -4,8 +4,8 @@
 |--------------|-------------------------------------------|
 | Document     | Progress Snapshot                         |
 | Project      | Windmeters Modbus Interface Tester        |
-| Date         | 2026-07-02 (updated)                      |
-| Status       | Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) started opportunistically once a real FG6485A was connected |
+| Date         | 2026-07-02 (updated again — wind split, GUI restructure, log fix, first version tag) |
+| Status       | **Tagged v0.4.0** (`changelog.md`) — Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) eight-of-nine done (`whatsNext.md` §3); wind speed/direction split + GUI restructure done (§10 below). Firmware now reports its own version (`fw_version`, WS status + `GET /api/v1/status` + web UI footer) — see `changelog.md` `[Unreleased]`. |
 | Related docs | `design/completeRealisationPlan.md` (Parts A/B this reports against), `design/realisationPlan.md` (MB-1/MB-2 detail), `design/scratchbook.md` (design source of truth), `design/whatsNext.md` (what follows this) |
 
 ---
@@ -14,11 +14,16 @@
 
 Every library and every FreeRTOS task in `completeRealisationPlan.md` Parts A
 and B is implemented, unit-tested, and individually verified against real
-hardware. Part C — Integration Test (INT-01…INT-09, requiring a two-peer
-RS-485 bench) — has not been started. See `whatsNext.md`.
+hardware. Part C — Integration Test (INT-01…INT-09) is eight-of-nine done
+against a real FG6485A bus peer; only INT-05 (real-DUT wind decode) remains,
+blocked on the DUT's own firmware. See `whatsNext.md`.
 
-**91/91 native unit tests pass** (`pio test -e native`, ~6s, reconfirmed
-today). Nothing in this repo is committed yet — see §7.
+**142/142 native unit tests pass** (`pio test -e native`, ~7s, reconfirmed
+today) — up from 91 at the last count in this section, from Phase 2.5's
+tests plus the wind speed/direction split and log-broadcast fix (§10).
+Everything through the Phase 3 integration-test fixes is committed
+(`5affff4`); §10's log-broadcast fix and this documentation pass are
+staged, not yet committed — see §8.
 
 ---
 
@@ -47,12 +52,15 @@ All four match their `completeRealisationPlan.md` §2 / `realisationPlan.md`
 | `wind_poll_task` (TASK-WIND) | Periodic poll + config read/write for one target address | 10 (`wind_poll`) | Real poll/config-read/config-write/suspend cycle through the queue/task/UART chain |
 | `web_server_task` (TASK-WEB) | HTTP + WebSocket server, serves the ported GUI | 10 (`web_core`) | Real HTTP requests, real WebSocket traffic, the Modicon-conversion worked example reproduced live via `POST /explorer/query` |
 
-Native test breakdown: `test_mb_core` 20, `test_mb_log` 4, `test_led_status`
+Native test breakdown (count at the time Part B wrapped up, before Phase
+2.5/the wind split added more — see §1 for the current total):
+`test_mb_core` 20, `test_mb_log` 4, `test_led_status`
 7, `test_cfg` 8, `test_mb_master` 6, `test_wifi_manager` 6,
 `test_ntp_manager` 12, `test_bus_scan` 8, `test_wind_poll` 10,
 `test_web_core` 10 — **91 total**.
 
-**Important caveat:** none of the hardware verification above exercised a
+**Important caveat (Phase 2's own limit at the time — resolved by Phase 3,
+see `whatsNext.md` §3):** none of the hardware verification above exercised a
 real Modbus bus peer — every check above proved the plumbing (queue, task,
 UART, WebSocket, HTTP) works, either with nothing listening on the bus or
 (the very first bring-up test only) the tester's own TX looped back into its
@@ -63,24 +71,34 @@ own RX. Actually talking Modbus to another device is Phase 3's job — see
 
 ## 4. GUI
 
-`firmware/data/` (`index.html`, `style.css`, `app.js`) is the template's GUI
-(`greenhouse-Controller-Modbus-sensor-emulator`), ported and extended per
-`completeRealisationPlan.md`'s guiding principle — one scrollable page, no
-framework, no build step:
+`firmware/data/` (`index.html`, `style.css`, `app.js`) started as the
+template's GUI (`greenhouse-Controller-Modbus-sensor-emulator`), ported and
+extended per `completeRealisationPlan.md`'s guiding principle — vanilla
+HTML/CSS/JS, no framework, no build step. Current shape (after the
+2026-07-02 restructure, §10):
 
-- **Kept as-is:** page shell, Status section, Modbus Log section, WiFi
-  Settings section, every `app.js` helper (`post()`, `setText()`,
-  `setBadge()`, `setSliderInput()`, WebSocket connect/reconnect, the
-  `type`-keyed message router).
-- **Removed:** FG6485A/S200/Replay sections — not part of this project's
-  scope.
-- **Added:** Bus Scanner, Wind Test, Register Explorer — new sections, new
-  `type` cases in the WebSocket router, backed by `web_core`'s JSON
-  builders.
-- **WiFi Settings is real, not a stub:** `POST /config/wifi` writes
-  `wifi_ssid`/`wifi_pass` to NVS via `cfg_set_str`. Known limitation: takes
-  effect on next reboot only, since `wifi_manager_task` evaluates stored
-  credentials once, at boot (tracked as a refinement in `whatsNext.md`).
+- **Status** (top, always visible) and **Modbus Log** (bottom, always
+  visible) bracket a tab bar — **Bus Scanner / Wind Speed / Wind Direction /
+  Register Explorer / System Settings** — rather than the original one
+  long scrollable page. `app.js` helpers (`post()`, `setText()`,
+  `setBadge()`, WebSocket connect/reconnect, the `type`-keyed message
+  router) are unchanged by the restructure — it's a CSS/layout change plus
+  a small `switchTab()` helper, not a rewrite.
+- **Removed at the start:** FG6485A/S200/Replay sections — not part of this
+  project's scope. **Removed 2026-07-02:** Bus Scanner's quick-preset row
+  (§10).
+- **Added:** Bus Scanner, Wind Speed, Wind Direction (originally one
+  combined "Wind Test", split 2026-07-02 — §10), Register Explorer — new
+  sections/tabs, new `type` cases in the WebSocket router, backed by
+  `web_core`'s JSON builders.
+- **System Settings is real, not a stub:** `POST /config/wifi` writes
+  `wifi_ssid`/`wifi_pass` to NVS via `cfg_set_str`, then calls
+  `ESP.restart()` so the new credentials actually take effect (originally
+  shipped as "takes effect on next reboot only" — that was a real INT-02
+  bug, not a documented limitation; fixed during Phase 3, see
+  `whatsNext.md` §3.2's INT-01/02 finding). Modbus Timeout/Retries joined
+  this section 2026-07-02 and pre-populate from the live status stream
+  instead of loading empty.
 
 ---
 
@@ -183,30 +201,62 @@ UART-glitch-right-after-init class of issue in `memory/gotcha-log.md`.
 
 ## 8. Repo state
 
-Nothing in this repo has been committed since the initial scaffolding
-(`git log`: `09f6567 Initial commit...`, `8edf18a Update`). All Phase 1/
-Phase 2 work — `firmware/`, `memory/`, `design/realisationPlan.md`,
-`design/completeRealisationPlan.md`, and this file — is untracked or
-modified in the working tree, left staged for review rather than committed
-(per this project's workflow: changes are prepared and handed off, never
-committed automatically).
+**Updated — no longer accurate to say nothing is committed.** Phase 1/2,
+Phase 2.5, the Phase 3 integration-test fixes, and §10's wind
+speed/direction split + GUI restructure are all committed
+(`git log`: `5affff4 Add Phase 2.5 machine API, split wind sensors into
+speed/direction, and refactor the GUI into tabs`, on top of `9393b53`,
+`d9c7189`, `aa9af37`, `3316f53`, `8edf18a`, `09f6567`). §10's log-broadcast
+TX-drop fix and this documentation pass are staged, not yet committed — per
+this project's workflow, changes are prepared and handed off, never
+committed automatically; everything up to `5affff4` reflects the user
+having done that handoff's follow-through themselves.
 
-While gathering context for this document, a test fixture in
-`firmware/test/test_web_core/test_web_core.cpp` was found to contain the
-real WiFi SSID used earlier this session to provision NVS credentials for
-hardware verification (§3). The SSID itself was never a secret needed for
-protocol testing — any placeholder string exercises the same JSON-building
-code path — so it's been replaced with `"test-network"`; tests re-run clean
-(10/10). The WiFi password was never written to any tracked file.
+While gathering context for an earlier version of this document, a test
+fixture in `firmware/test/test_web_core/test_web_core.cpp` was found to
+contain the real WiFi SSID used earlier that session to provision NVS
+credentials for hardware verification (§3). The SSID itself was never a
+secret needed for protocol testing — any placeholder string exercises the
+same JSON-building code path — so it was replaced with `"test-network"`;
+tests re-ran clean. The WiFi password was never written to any tracked
+file. (Historical note — this finding predates §10 and is already
+reflected in the committed test suite.)
 
 ---
 
 ## 9. What's next
 
-Everything in Parts A and B of `completeRealisationPlan.md`, plus Phase 2.5
-(`design/api.md`), is done. What's left is Part C — Integration Test — now
-partially underway opportunistically now that a real bus peer is connected
-— plus a short list of known refinements. See `design/whatsNext.md`.
+Everything in Parts A and B of `completeRealisationPlan.md`, Phase 2.5
+(`design/api.md`), and §10's wind split/GUI work is done. What's left:
+INT-05 (Part C — Integration Test), blocked on the real DUT's firmware, and
+a short list of known refinements. See `design/whatsNext.md`.
+
+---
+
+## 10. Wind speed/direction split + GUI restructure (2026-07-02)
+
+Done after Phase 3's integration testing (§9) wrapped up. Full detail:
+`design/whatsNext.md` §2.5 (the canonical writeup — this section is a
+shorter pointer so this document doesn't go stale relative to that one
+again). Summary:
+
+- Wind speed and wind direction turned out to be physically separate DUT
+  units at separate addresses, not one combined device — `wind_poll`'s
+  core, its FreeRTOS task, the `/wind/*` and `/api/v1/wind` endpoints, and
+  the NVS keys (`wind_speed_addr`/`wind_dir_addr`, replacing one shared
+  `wind_test_addr`) are all now parameterised on sensor type.
+- GUI restructured into Status (top, pinned) → tab bar (Bus Scanner / Wind
+  Speed / Wind Direction / Register Explorer / System Settings) → Modbus
+  Log (bottom, pinned). Bus Scanner presets removed. Modbus Log timestamps
+  now `HH:MM:SS`, cap raised 30→50. System Settings' Modbus Timeout/Retries
+  pre-populate from live status instead of loading empty.
+- Two real bugs found and fixed along the way, neither part of the
+  original ask: the WebSocket log broadcaster silently dropped TX entries
+  for fast one-off transactions (only ever looked at the single newest
+  entry per tick), and `GET /api/v1/spec`'s DUT register snapshot still
+  described the pre-split combined register map.
+- **142/142 native tests pass**, hardware build/flash/live-verification
+  done for every piece.
 
 ---
 

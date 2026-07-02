@@ -50,8 +50,8 @@ this one, to avoid the two drifting apart.
   task-per-concern shape all come from
   `greenhouse-Controller-Modbus-sensor-emulator` largely unchanged
   (`scratchbook.md` §3). Implementation effort belongs on the parts that
-  actually changed: the Modbus master engine and the three new web sections
-  (Bus Scanner, Wind Test, Register Explorer).
+  actually changed: the Modbus master engine and the new web sections (Bus
+  Scanner, Wind Speed, Wind Direction, Register Explorer).
 - **The GUI is the template's, ported — not redesigned.** `firmware/data/`
   (`index.html`, `style.css`, `app.js`) is vanilla HTML/CSS/JS: one
   scrollable page with a `<section>` per feature, no framework, no build
@@ -71,7 +71,7 @@ this one, to avoid the two drifting apart.
 - **Register map is provisional; don't build around today's values.** The
   DUT's register map is 4 commits old and still moving
   (`scratchbook.md` §5). The Register Explorer — generic, not hard-coded —
-  is what survives that; the Wind Test panel's fixed decode is a
+  is what survives that; the Wind Speed/Direction tabs' fixed decode is a
   convenience layer on top of it, expected to need updates as the DUT
   evolves.
 
@@ -87,7 +87,9 @@ greenhouse-Controller's ESP-IDF `nvs_config` — same underlying flash
 storage, different wrapper). Persists every key in `scratchbook.md` §7's
 NVS table: `wifi_ssid`, `wifi_pass`, `ntp_server`, `tz_posix`, `mb_baud`,
 `mb_timeout_ms`, `mb_retries`, `scan_range_start`, `scan_range_end`,
-`wind_test_addr`, `wind_poll_interval_ms`.
+`wind_speed_addr`, `wind_dir_addr`, `wind_poll_interval_ms`. (The last two
+wind keys were one shared `wind_test_addr` before the 2026-07-02 speed/
+direction split — see TASK-WIND below.)
 
 **API surface:**
 
@@ -106,7 +108,8 @@ void     cfg_reset_defaults();
 
 **Task compatibility:** No internal locking — `Preferences`/NVS is safe for
 single-threaded access per key, but callers writing from multiple tasks
-(e.g. web server writing `wind_test_addr` while `wind_poll_task` reads it)
+(e.g. web server writing `wind_speed_addr`/`wind_dir_addr` while
+`wind_poll_task` reads them)
 must not assume atomicity across a get+modify+set sequence. In practice
 only the web server writes; every other task only reads.
 
@@ -338,40 +341,66 @@ UART directly.
 
 ---
 
-#### TASK-WIND — Wind Test Poller
+#### TASK-WIND — Wind Speed / Wind Direction Poller
 
 **Depends on:** TASK-MB
 **Depends on tasks:** TASK-MB running
 
+**Split 2026-07-02:** originally specified as one "Wind Test" poller
+targeting a single combined 5-input/4-holding register block. Reading the
+DUT's own hardware docs more closely showed wind speed and wind direction
+are physically separate units at separate addresses, each implementing
+only its own registers — not one device exposing both sensors together.
+The task below is now parameterised on a `wind_sensor_type_t`
+(`WIND_SENSOR_SPEED` / `WIND_SENSOR_DIRECTION`); only one type is ever
+polling at a time (same "one target" constraint as originally planned, now
+expressed per-type rather than per-field). Full register maps:
+`scratchbook.md` §5.
+
 **Implementation:**
 
-- While the Wind Test panel targets address `wind_test_addr`: polls input
-  registers `0x0000`–`0x0004` (one FC04 call, 5 registers — `scratchbook.md`
-  §5) every `wind_poll_interval_ms` (NVS, default 1000 ms).
+- While active for a given type and address (`wind_speed_addr` or
+  `wind_dir_addr`, NVS): polls that type's input registers — 3 registers
+  (`0x0000`–`0x0002`: speed_instant, speed_avg, raw_pulses) for
+  WIND_SENSOR_SPEED, 2 registers (`0x0000`–`0x0001`: dir_instant, dir_avg)
+  for WIND_SENSOR_DIRECTION — one FC04 call every `wind_poll_interval_ms`
+  (NVS, default 1000 ms, shared by both types).
 - Decodes with the DUT's ×10 scale factor — **not** the S200's ×1000
-  (`scratchbook.md` §5 scaling gotcha) — into `dir_instant_deg`,
-  `speed_instant_ms`, `dir_avg_deg`, `speed_avg_ms`, `raw_pulses`.
+  (`scratchbook.md` §5 scaling gotcha) — into the fields that type's
+  firmware actually has; the other type's fields in the shared
+  `wind_reading_t` struct are left zeroed rather than split into two
+  struct types, to avoid cascading the split through every JSON
+  builder/GUI element for no behavioural benefit.
 - Updates shared wind state under mutex; feeds the WebSocket `wind.*`
-  fields, including `age_ms` since the last successful poll so the UI can
-  show staleness.
-- On a config-read request: FC03 reads holding registers `0x0000`–`0x0003`.
-  On a config-write request: FC06 write-back of the single changed field
-  (device address, direction offset, measurement window, or averaging
-  window) — never a blind FC16 of all four, so a typo in one field can't
-  clobber the others.
-- Suspended (no polling, no bus traffic) when the Wind Test panel isn't
-  active.
+  fields (tagged `sensor_type`), including `age_ms` since the last
+  successful poll so the UI can show staleness.
+- On a config-read request: FC03 reads that type's 3 holding registers
+  (`0x0000`–`0x0002`). On a config-write request: FC06 write-back of the
+  single changed field — device address and averaging window exist on
+  both types; direction offset is Direction-only, measurement window is
+  Speed-only (`wind_config_field_register()` returns "field doesn't exist
+  for this type," never touching the wire, if asked for the wrong one) —
+  never a blind FC16 of everything, so a typo in one field can't clobber
+  the others.
+- Suspended (no polling, no bus traffic) when neither Wind tab is active;
+  switching which type is active (e.g. starting Speed while Direction was
+  running) stops the previous type's polling — there is exactly one
+  `s_active_type`, not two independently-running pollers.
 
 **Acceptance tests** (target):
 
-- `test_wind_poll_decodes_registers_correctly` — known register values on
-  the bench target (or a temporary mock slave, see §4); verify e.g. raw
-  `1834` → `183.4°`
+- `test_wind_poll_decodes_speed_registers_correctly` /
+  `test_wind_poll_decodes_direction_registers_correctly` — known register
+  values on the bench target (or a temporary mock slave, see §4); verify
+  e.g. raw `1834` → `183.4°`, and that decoding one type leaves the other
+  type's fields at zero
 - `test_wind_poll_respects_interval`
 - `test_wind_config_write_fc06_single_field` — change only the offset;
-  verify exactly one FC06 frame is sent, for that register only
-- `test_wind_poll_suspended_when_panel_inactive` — verify zero bus traffic
-  from this task while the panel is closed
+  verify exactly one FC06 frame is sent, for that register only, and that
+  writing a field that doesn't exist for the active type never touches
+  the wire
+- `test_wind_poll_suspended_when_no_tab_active` — verify zero bus traffic
+  from this task while both tabs are closed
 
 ---
 
@@ -398,12 +427,12 @@ TASK-MB, TASK-SCAN, TASK-WIND all running
 
   | Section | Backing |
   |---|---|
-  | Status (Home) | WiFi state (TASK-WIFI), NTP sync state (TASK-NTP), uptime |
-  | Bus Scanner | start/stop → TASK-SCAN; results table from scan state |
-  | Wind Test | start/stop/target-address → TASK-WIND; live values + config form |
+  | Status (Home) | WiFi state (TASK-WIFI), NTP sync state (TASK-NTP), uptime. Pinned to the top of the page (2026-07-02 GUI restructure) — not one of the tabs below |
+  | Bus Scanner | start/stop → TASK-SCAN; results table from scan state. One of the tabs between Status and Modbus Log |
+  | Wind Speed / Wind Direction | start/stop/target-address → TASK-WIND, one tab each (2026-07-02 split — was a single "Wind Test" tab); live values + config form scoped to that type's own holding registers |
   | Register Explorer | one-shot request handler — submits directly to TASK-MB's queue, applies the Modicon→raw conversion (`scratchbook.md` §5 formula) before submission, returns decoded result + raw hex |
-  | Modbus Log | reads `LIB-LOG` via `mblog_get_recent()`; clear button calls `mblog_clear()` |
-  | WiFi Settings | SSID scan/select, password entry, NTP server, manual time — writes via LIB-NVS |
+  | Modbus Log | reads `LIB-LOG` via `mblog_get_recent()`; clear button calls `mblog_clear()`. Pinned to the bottom of the page, not a tab. `HH:MM:SS` GUI timestamps, last 50 entries |
+  | System Settings | SSID scan/select, password entry, NTP server, manual time, Modbus timeout/retries — writes via LIB-NVS. Grew from "WiFi Settings" once Modbus settings needed a home; timeout/retries pre-populate from the live status stream instead of loading empty |
 
 - WebSocket at `/ws` pushes `type`-tagged JSON matching `app.js`'s existing
   router (`scratchbook.md` §7): `status` at ~1 s cadence, `scan` while a
@@ -454,11 +483,11 @@ it exercises real commercial firmware rather than a software stand-in.
 | INT-02 | Configure WiFi via AP-mode web UI | — | Device reconnects in STA mode; `windmeter-tester.local` resolves |
 | INT-03 | Full bus scan | FG6485A (address 1) | Bus Scanner reports the address; progress visible throughout |
 | INT-04 | Generic register read via Register Explorer | FG6485A | FC03 read of FG6485A registers returns values matching an independent read — validates FC03 mechanics and the Modicon-conversion path, independent of the DUT's register map |
-| INT-05 | Wind Test decode accuracy | Real DUT | **Blocked** (§6) — the FG6485A's registers use the wrong scale/layout to validate the DUT's Wind Test decode (×10, 5 registers); this test can only be meaningful against the real DUT or a purpose-built mock of its exact register map |
-| INT-06 | Register Explorer write + read-back | FG6485A (alarm config, `0x000C`–`0x0013`) as a mechanics-only stand-in | FC16 write followed by FC03 read-back returns the written values — validates the write path generically; DUT-specific holding-register write-back (INT for the Wind Test config form) is blocked the same way as INT-05 |
+| INT-05 | Wind Speed / Wind Direction decode accuracy | Real DUT | **Blocked** (§6) — the FG6485A's registers use the wrong scale/layout to validate either DUT variant's decode (×10; 3 registers for Speed, 2 for Direction, `scratchbook.md` §5); this test can only be meaningful against the real DUT or a purpose-built mock of its exact register maps |
+| INT-06 | Register Explorer write + read-back | FG6485A (alarm config, `0x000C`–`0x0013`) as a mechanics-only stand-in | FC16 write followed by FC03 read-back returns the written values — validates the write path generically; DUT-specific holding-register write-back (via the Wind Speed/Direction tabs' own config forms) is blocked the same way as INT-05 |
 | INT-07 | Modbus Log ordering | Either | TX and RX frames from a scan appear correctly interleaved and timestamped |
 | INT-08 | LED state transitions | Either | Idle → scanning → valid-frame/error states are visually correct and return to idle when the scan ends |
-| INT-09 | Settings survive power-cycle | — | WiFi credentials, last scan range, and last Wind Test address are all retained after a power-cycle |
+| INT-09 | Settings survive power-cycle | — | WiFi credentials, last scan range, and last Wind Speed/Direction addresses are all retained after a power-cycle |
 
 Results for INT-03/04/06/07/09: `design/whatsNext.md` §3.2.
 
@@ -482,12 +511,14 @@ FreeRTOS Tasks
 │   └── TASK-MB    Modbus Master  ← LIB-MB, LIB-LOG, LIB-LED   (= MB-2, realisationPlan.md)
 │
 ├── Group 3 (Application Logic)
-│   ├── TASK-SCAN  Bus Scanner    ← LIB-LED | needs TASK-MB
-│   └── TASK-WIND  Wind Test      │ needs TASK-MB
+│   ├── TASK-SCAN  Bus Scanner         ← LIB-LED | needs TASK-MB
+│   └── TASK-WIND  Wind Speed/Direction │ needs TASK-MB (one task, type-parameterised — §3 TASK-WIND)
 │
 └── Group 4 (Web / UI)
     └── TASK-WEB   Web Server     ← LIB-NVS, LIB-LOG | needs TASK-WIFI, TASK-MB, TASK-SCAN, TASK-WIND
-           ├── Status, Bus Scanner, Wind Test, Modbus Log, WiFi Settings sections (one ported index.html)
+           ├── Status (pinned top), Bus Scanner, Wind Speed, Wind Direction,
+           │   Register Explorer, System Settings tabs, Modbus Log (pinned
+           │   bottom) — one ported+restructured index.html
            ├── Register Explorer  → direct request/response against TASK-MB (no dedicated task)
            └── WebSocket status push (~1 Hz)
 ```
@@ -502,12 +533,13 @@ tested in parallel — WiFi/NTP need no RS-485 hardware, and TASK-MB (via
 
 | Issue | Blocks | Status |
 |-------|--------|--------|
-| `windmeters-modbus-interface` firmware has no register implementation yet (`main.c` scaffolding only) | INT-05 (Wind Test decode accuracy against the real DUT) and the DUT-specific half of INT-06 | **Open** — does not block any library, any task, or INT-01–04, 07–09 |
+| `windmeters-modbus-interface` firmware has no register implementation yet (`main.c` scaffolding only) | INT-05 (Wind Speed/Direction decode accuracy against the real DUT) and the DUT-specific half of INT-06 | **Open** — does not block any library, any task, or INT-01–04, 07–09 |
 | ~~AtomS3 RS485 base RX/TX pin assignment~~ | ~~TASK-MB / LIB-MB UART init~~ | **Closed** — `G5`=RX, `G6`=TX (`scratchbook.md` §4.1/§4.2/§9) |
 | ~~AtomS3 RGB LED GPIO~~ | ~~LIB-LED~~ | **Closed** — GPIO35, confirmed via `blinkyS3` |
 | ~~PlatformIO board id~~ | ~~project scaffolding~~ | **Closed** — `m5stack-atoms3` |
 | ~~Addressing convention (raw vs. Modicon)~~ | ~~LIB-MB API, Register Explorer~~ | **Closed** — raw canonical, applied in both this repo and upstream `windmeters-modbus-interface` |
-| Multi-device Wind Test dashboard | TASK-WIND (v2 scope only) | **Deferred to v2** per `scratchbook.md` §9 — not a v1 blocker |
+| ~~Combined vs. split Wind Speed/Direction register maps~~ | ~~TASK-WIND~~ | **Closed 2026-07-02** — split into two type-parameterised maps, `scratchbook.md` §5/§9 |
+| Multi-device Wind dashboard (several devices live on screen at once) | TASK-WIND (v2 scope only) | **Deferred to v2** per `scratchbook.md` §9 — not a v1 blocker. Not the same thing as the 2026-07-02 Wind Speed/Direction tab split, which is two *tabs* for two *sensor types*, still one active poll target at a time |
 | Register Explorer saved queries | TASK-WEB (v2 scope only) | **Backlog** per `scratchbook.md` §9 — not a v1 blocker |
 
 ---
