@@ -136,9 +136,10 @@ the configured timeout/retries), return the outcome.
 
 ### 4.2 Response — success (HTTP 200)
 
-Read example (`FC04`, 3 registers from slave 30 — the Wind Speed variant's
-full input map; Wind Direction at slave 31 has its own, shorter 2-register
-map, see `design/scratchbook.md` §5 for both):
+Read example (`FC04`, all 12 input registers from slave 30 — Wind Speed and
+Wind Direction share one identical 12-register input map, `design/scratchbook.md`
+§5; a register the active build's sensor doesn't have reads 0, which is why
+registers 0/2 — the direction fields — are 0 in this speed-build response):
 
 ```json
 {
@@ -147,17 +148,19 @@ map, see `design/scratchbook.md` §5 for both):
   "slave": 30,
   "function": 4,
   "register": 0,
-  "count": 3,
-  "registers": [42, 39, 27],
-  "raw_tx": "1E 04 00 00 00 03 B2 64",
-  "raw_rx": "1E 04 06 00 2A 00 27 00 1B 05 65",
+  "count": 12,
+  "registers": [0, 42, 0, 39, 27, 0, 322, 120, 0, 500, 8, 65],
+  "raw_tx": "1E 04 00 00 00 0C F2 60",
+  "raw_rx": "1E 04 18 00 00 00 2A 00 00 00 27 00 1B 00 00 01 42 00 78 00 00 01 F4 00 08 00 41 51 49",
   "round_trip_ms": 38,
   "attempts": 1,
   "ts": "2026-07-02T14:30:45Z"
 }
 ```
 
-Write example (`FC06`, set direction calibration offset):
+Write example (`FC06`, set direction calibration offset — holding register
+0, `design/scratchbook.md` §5; there is no device-address register to write
+instead, as of the DUT's TDS v0.6):
 
 ```json
 {
@@ -165,10 +168,10 @@ Write example (`FC06`, set direction calibration offset):
   "status": "ok",
   "slave": 31,
   "function": 6,
-  "register": 1,
+  "register": 0,
   "written": [150],
-  "raw_tx": "1F 06 00 01 00 96 5B DA",
-  "raw_rx": "1F 06 00 01 00 96 5B DA",
+  "raw_tx": "1F 06 00 00 00 96 0A 1A",
+  "raw_rx": "1F 06 00 00 00 96 0A 1A",
   "round_trip_ms": 22,
   "attempts": 1,
   "ts": "2026-07-02T14:31:02Z"
@@ -250,9 +253,13 @@ current DUT register-map snapshot the Wind Speed/Direction tabs use. Intent:
 an LLM given only `http://<ip>/api/v1/spec` can bootstrap a full test
 session without human-provided documentation.
 
-`dut_register_snapshot` is keyed by sensor type (`wind_speed`/
-`wind_direction`, 2026-07-02 — used to be one flat register list before the
-speed/direction split, `design/scratchbook.md` §5/§9):
+`dut_register_snapshot` holds one `"wind"` register map (2026-07-02 — was
+briefly keyed by sensor type, `wind_speed`/`wind_direction`, right after the
+physical-separation finding, before the DUT's TDS matured enough to specify
+that both builds actually share one identical map, `design/scratchbook.md`
+§5/§9). Each input register carries `active_on`, listing which build(s) it
+carries real data on — a register not listed for the current build reads 0.
+There is no device-address holding register (TDS v0.6, FR-MB07/FR-MB26):
 
 ```json
 {
@@ -261,13 +268,15 @@ speed/direction split, `design/scratchbook.md` §5/§9):
   "endpoints": [ { "method": "POST", "path": "/api/v1/modbus", "summary": "...", "request": { }, "response": { } } ],
   "statuses": { "ok": "…", "timeout": "…", "crc_error": "…" },
   "dut_register_snapshot": {
-    "wind_speed": {
-      "input_registers":   [ { "addr": 0, "name": "speed_instant", "unit": "0.1 m/s" } ],
-      "holding_registers": [ { "addr": 0, "name": "device_addr", "range": [1, 247] } ]
-    },
-    "wind_direction": {
-      "input_registers":   [ { "addr": 0, "name": "dir_instant", "unit": "0.1 deg" } ],
-      "holding_registers": [ { "addr": 0, "name": "device_addr", "range": [1, 247] } ]
+    "wind": {
+      "input_registers": [
+        { "addr": 0, "name": "dir_instant", "unit": "0.1 deg", "active_on": ["direction"] },
+        { "addr": 1, "name": "speed_instant", "unit": "0.1 m/s", "active_on": ["speed"] }
+      ],
+      "holding_registers": [
+        { "addr": 0, "name": "dir_offset", "unit": "0.1 deg", "range": [0, 3599] },
+        { "addr": 1, "name": "measurement_window_ms", "range": [100, 60000] }
+      ]
     }
   }
 }
@@ -372,11 +381,12 @@ registers whenever a Wind tab is also open) and re-deriving the DUT's ×10
 decode client-side even though `wind_poll.cpp` already does it.
 
 **Updated 2026-07-02 for the wind speed/direction split** (`design/scratchbook.md`
-§5, §9): wind speed and wind direction are separate physical units, each
-with its own register map, so this endpoint takes a `type` query parameter
-(`"speed"` default if omitted, or `"direction"`) and returns only that
-type's fields — it no longer returns both sensors' data in one combined
-object.
+§5, §9): wind speed and wind direction are separate physical units (sharing
+one identical register map as of the DUT's TDS v0.6, but still two
+different devices at two different addresses), so this endpoint takes a
+`type` query parameter (`"speed"` default if omitted, or `"direction"`) and
+returns only the fields meaningful for that type — it no longer returns
+both sensors' data in one combined object.
 
 ```json
 // GET /api/v1/wind?type=speed
@@ -388,6 +398,8 @@ object.
   "speed_instant_ms": 4.2,
   "speed_avg_ms": 3.9,
   "raw_pulses": 27,
+  "gust_ms": 6.5,
+  "seconds_since_pulse": 8,
   "age_ms": 420
 }
 ```
@@ -401,6 +413,8 @@ object.
   "sensor_type": "direction",
   "dir_instant_deg": 183.4,
   "dir_avg_deg": 181.0,
+  "dir_fault": false,
+  "raw_adc": 512,
   "age_ms": 420
 }
 ```
@@ -422,18 +436,19 @@ the stored default.
 
 ## 6. Worked examples (curl)
 
-Read the Wind Direction unit's two input registers (raw addressing; Wind
-Speed at slave 30 has its own 3-register map, `design/scratchbook.md` §5):
+Read the Wind Direction unit's instantaneous heading (raw addressing; both
+wind units share one identical 12-register input map, `design/scratchbook.md`
+§5 — register 0 is meaningful on a direction build, reads 0 on a speed one):
 
 ```sh
 curl -s -X POST http://192.168.4.1/api/v1/modbus \
   -H 'Content-Type: application/json' \
-  -d '{"slave": 31, "function": 4, "register": 0, "count": 2}'
+  -d '{"slave": 31, "function": 4, "register": 0, "count": 1}'
 ```
 
 Write the averaging window using a Modicon register number (holding
-register 2 on both wind types — `40003`, not `40004`; see §5's holding
-register tables for why this moved after the speed/direction split):
+register 2 — `40003` — identical on both wind units, `design/scratchbook.md`
+§5):
 
 ```sh
 curl -s -X POST http://192.168.4.1/api/v1/modbus \
@@ -441,14 +456,16 @@ curl -s -X POST http://192.168.4.1/api/v1/modbus \
   -d '{"slave": 31, "function": 6, "register": "40003", "register_format": "modicon", "values": [10]}'
 ```
 
-Change the DUT's slave address (FC06 to holding register 0), then verify at
-the new address:
+Write the low-speed cutoff, then verify by reading it back (there is no
+device-address register to demonstrate instead, as of the DUT's TDS v0.6 —
+the Modbus address is hardware-jumper only and can't be changed over the
+wire):
 
 ```sh
 curl -s -X POST http://192.168.4.1/api/v1/modbus \
-  -d '{"slave": 31, "function": 6, "register": 0, "values": [36]}'
+  -d '{"slave": 30, "function": 6, "register": 3, "values": [40]}'
 curl -s -X POST http://192.168.4.1/api/v1/modbus \
-  -d '{"slave": 36, "function": 3, "register": 0, "count": 1}'
+  -d '{"slave": 30, "function": 3, "register": 3, "count": 1}'
 ```
 
 Full bus sweep, blocking:

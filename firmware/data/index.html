@@ -82,14 +82,22 @@
   <table class="reg-tbl">
     <thead><tr><th>Register</th><th>Addr</th><th>Field</th><th>Scale</th></tr></thead>
     <tbody>
-      <tr><td>Input (FC04)</td><td>0x0000</td><td>speed_instant</td><td>raw &divide;10 m/s</td></tr>
-      <tr><td>Input (FC04)</td><td>0x0001</td><td>speed_avg</td><td>raw &divide;10 m/s</td></tr>
-      <tr><td>Input (FC04)</td><td>0x0002</td><td>raw_pulses</td><td>unscaled</td></tr>
-      <tr><td>Holding (FC03/06)</td><td>0x0000</td><td>device_addr</td><td>unscaled, 1-247</td></tr>
-      <tr><td>Holding (FC03/06)</td><td>0x0001</td><td>measurement_window</td><td>unscaled ms</td></tr>
-      <tr><td>Holding (FC03/06)</td><td>0x0002</td><td>averaging_window</td><td>unscaled s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0001</td><td>speed_instant</td><td>raw &divide;10 m/s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0003</td><td>speed_avg</td><td>raw &divide;10 m/s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0004</td><td>raw_pulses (last window)</td><td>unscaled</td></tr>
+      <tr><td>Input (FC04)</td><td>0x000A</td><td>seconds_since_pulse</td><td>unscaled s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x000B</td><td>gust (max in averaging window)</td><td>raw &divide;10 m/s</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0001</td><td>measurement_window</td><td>unscaled ms, 100-60000</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0002</td><td>averaging_window</td><td>unscaled s, 1-600</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0003</td><td>low_speed_cutoff</td><td>raw &divide;10 m/s, 0-50</td></tr>
     </tbody>
   </table>
+  <p class="hint">Full 12-input/4-holding register map (identical addresses on both wind
+    units, TDS §2.7/§2.8) — this table shows only the fields active on a speed
+    build; the rest (direction fields, plus status/identification/uptime/error-
+    count diagnostics) read 0 here and are reachable via
+    <a href="#" onclick="switchTab('explorer'); return false;">Register Explorer</a>.
+    No device-address register exists — the address is hardware-jumper only.</p>
 
   <div class="row">
     <label>Slave address</label>
@@ -110,16 +118,13 @@
     <div class="card">
       <h3>Raw</h3>
       <p>Pulses: <strong id="wspd-pulses">—</strong></p>
+      <p>Gust: <strong id="wspd-gust">—</strong> m/s</p>
+      <p>Since last pulse: <strong id="wspd-since-pulse">—</strong> s</p>
       <p>Age: <strong id="wspd-age">—</strong> ms</p>
     </div>
   </div>
 
   <h3 style="margin-top:.75rem">Config (holding registers)</h3>
-  <div class="row">
-    <label>Device address</label>
-    <input type="number" id="wspd-cfg-addr" min="1" max="247" class="short">
-    <button class="btn-sm" onclick="postWindConfigWrite('speed', 'device_addr')">Write</button>
-  </div>
   <div class="row">
     <label>Measurement window (ms)</label>
     <input type="number" id="wspd-cfg-meas" class="short">
@@ -129,6 +134,11 @@
     <label>Averaging window (s)</label>
     <input type="number" id="wspd-cfg-avg" class="short">
     <button class="btn-sm" onclick="postWindConfigWrite('speed', 'averaging_window')">Write</button>
+  </div>
+  <div class="row">
+    <label>Low-speed cutoff (m/s)</label>
+    <input type="number" id="wspd-cfg-cutoff" step="0.1" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('speed', 'low_speed_cutoff')">Write</button>
   </div>
   <button onclick="postWindConfigRead('speed')">Refresh config from device</button>
   <p id="wspd-config-status" class="hint"></p>
@@ -142,13 +152,19 @@
   <table class="reg-tbl">
     <thead><tr><th>Register</th><th>Addr</th><th>Field</th><th>Scale</th></tr></thead>
     <tbody>
-      <tr><td>Input (FC04)</td><td>0x0000</td><td>dir_instant</td><td>raw &divide;10 &deg;</td></tr>
-      <tr><td>Input (FC04)</td><td>0x0001</td><td>dir_avg</td><td>raw &divide;10 &deg;</td></tr>
-      <tr><td>Holding (FC03/06)</td><td>0x0000</td><td>device_addr</td><td>unscaled, 1-247</td></tr>
-      <tr><td>Holding (FC03/06)</td><td>0x0001</td><td>dir_offset</td><td>raw &divide;10 &deg;</td></tr>
-      <tr><td>Holding (FC03/06)</td><td>0x0002</td><td>averaging_window</td><td>unscaled s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0000</td><td>dir_instant</td><td>raw &divide;10 &deg;, 65535 = sensor fault</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0002</td><td>dir_avg</td><td>raw &divide;10 &deg;, 65535 = sensor fault</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0004</td><td>raw_adc (last conversion)</td><td>unscaled, 0-1023</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0000</td><td>dir_offset</td><td>raw &divide;10 &deg;, 0-3599</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0002</td><td>averaging_window</td><td>unscaled s, 1-600</td></tr>
     </tbody>
   </table>
+  <p class="hint">Full 12-input/4-holding register map (identical addresses on both wind
+    units, TDS §2.7/§2.8) — this table shows only the fields active on a direction
+    build; the rest (speed fields, plus status/identification/uptime/error-count
+    diagnostics) read 0 here and are reachable via
+    <a href="#" onclick="switchTab('explorer'); return false;">Register Explorer</a>.
+    No device-address register exists — the address is hardware-jumper only.</p>
 
   <div class="row">
     <label>Slave address</label>
@@ -165,19 +181,16 @@
       <h3>Direction</h3>
       <p>Instant: <strong id="wdir-instant">—</strong> &deg;</p>
       <p>Average: <strong id="wdir-avg">—</strong> &deg;</p>
+      <span id="wdir-fault" class="badge fault" style="display:none">Sensor fault</span>
     </div>
     <div class="card">
       <h3>Raw</h3>
+      <p>ADC: <strong id="wdir-adc">—</strong></p>
       <p>Age: <strong id="wdir-age">—</strong> ms</p>
     </div>
   </div>
 
   <h3 style="margin-top:.75rem">Config (holding registers)</h3>
-  <div class="row">
-    <label>Device address</label>
-    <input type="number" id="wdir-cfg-addr" min="1" max="247" class="short">
-    <button class="btn-sm" onclick="postWindConfigWrite('direction', 'device_addr')">Write</button>
-  </div>
   <div class="row">
     <label>Direction offset (&deg;)</label>
     <input type="number" id="wdir-cfg-offset" step="0.1" class="short">

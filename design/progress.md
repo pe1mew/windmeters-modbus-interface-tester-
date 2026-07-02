@@ -4,8 +4,8 @@
 |--------------|-------------------------------------------|
 | Document     | Progress Snapshot                         |
 | Project      | Windmeters Modbus Interface Tester        |
-| Date         | 2026-07-02 (updated again — first-boot CRC error root-caused and fixed, v0.4.2) |
-| Status       | **Tagged v0.4.2** (`changelog.md`) — Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) eight-of-nine done (`whatsNext.md` §3); wind speed/direction split + GUI restructure done (§10 below). Firmware reports its own version (`fw_version`, WS status + `GET /api/v1/status` + web UI footer). v0.4.1: removed a dead NVS key + a dead function found by a full dead-code audit, closed a real gap where `GET /api/v1/log` never actually used real timestamps even when NTP was synced. v0.4.2: root-caused and fixed the first-transaction-after-boot CRC error (`mb_transport_arduino_init()` now flushes a bench-confirmed stray RX byte instead of leaving it to corrupt the first real read) — closes a `memory/gotcha-log.md` entry that had sat unconfirmed for months. |
+| Date         | 2026-07-02 (updated again — wind register map reconciled against the DUT's TDS v0.6, §11) |
+| Status       | **Tagged v0.4.2** (`changelog.md`) — Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) eight-of-nine done (`whatsNext.md` §3); wind speed/direction split + GUI restructure done (§10 below). Firmware reports its own version (`fw_version`, WS status + `GET /api/v1/status` + web UI footer). v0.4.1: removed a dead NVS key + a dead function found by a full dead-code audit, closed a real gap where `GET /api/v1/log` never actually used real timestamps even when NTP was synced. v0.4.2: root-caused and fixed the first-transaction-after-boot CRC error (`mb_transport_arduino_init()` now flushes a bench-confirmed stray RX byte instead of leaving it to corrupt the first real read) — closes a `memory/gotcha-log.md` entry that had sat unconfirmed for months. Since v0.4.2 (not yet its own tag): the DUT's TDS matured to v0.6 (FR-MB27) with a materially different register model than the tester assumed — §11 documents the reconciliation across code, tests, GUI, and docs. |
 | Related docs | `design/completeRealisationPlan.md` (Parts A/B this reports against), `design/realisationPlan.md` (MB-1/MB-2 detail), `design/scratchbook.md` (design source of truth), `design/whatsNext.md` (what follows this) |
 
 ---
@@ -18,12 +18,14 @@ hardware. Part C — Integration Test (INT-01…INT-09) is eight-of-nine done
 against a real FG6485A bus peer; only INT-05 (real-DUT wind decode) remains,
 blocked on the DUT's own firmware. See `whatsNext.md`.
 
-**142/142 native unit tests pass** (`pio test -e native`, ~7s, reconfirmed
-today) — up from 91 at the last count in this section, from Phase 2.5's
-tests plus the wind speed/direction split and log-broadcast fix (§10).
+**143/143 native unit tests pass** (`pio test -e native`, ~6s, reconfirmed
+today) — up from 142 after §11's `test_wind_poll` rewrite against the DUT's
+TDS v0.6 register model (17 cases, up from the pre-reconciliation count),
+which itself followed Phase 2.5's tests plus the wind speed/direction split
+and log-broadcast fix (§10).
 Everything through the Phase 3 integration-test fixes is committed
-(`5affff4`); §10's log-broadcast fix and this documentation pass are
-staged, not yet committed — see §8.
+(`5affff4`); §10's log-broadcast fix, §11's TDS v0.6 reconciliation, and
+this documentation pass are staged, not yet committed — see §8.
 
 ---
 
@@ -257,6 +259,60 @@ again). Summary:
   described the pre-split combined register map.
 - **142/142 native tests pass**, hardware build/flash/live-verification
   done for every piece.
+
+---
+
+## 11. Wind register map reconciled against DUT TDS v0.6 (2026-07-02)
+
+The DUT's (`windmeters-modbus-interface`) Technical Design Specification had
+matured to v0.6 since §10's wind split was built, and settled on a
+materially different register model (FR-MB27): both Wind Speed and Wind
+Direction firmware builds now implement one *identical* 12-input
+(`0x0000`–`0x000B`) + 4-holding (`0x0000`–`0x0003`) register map at the same
+addresses — a register the active build's sensor doesn't have just reads 0,
+rather than each type having its own differently-addressed map as §10
+assumed. Requested as "verify the register maps (regenerate them) against
+the TDS"; touched code, tests, GUI, and every design doc that described the
+old per-type layout.
+
+- **`wind_poll` core rewritten**: one `wind_poll_decode()` for both types
+  reading the full 12-register block into a unified `wind_reading_t`
+  (instant/avg dir+speed, raw diagnostic, gust, seconds-since-pulse, a
+  direction-fault flag for the FR-S38 sensor-fault sentinel `65535`);
+  `wind_config_field_register()` dropped its `type` parameter — all 4
+  holding registers exist at the same addresses on both builds now, so
+  there's nothing left for `type` to disambiguate. `test_wind_poll` rewritten
+  to 17 cases (full-block decode both types, 3 fault-sentinel cases, fixed
+  register counts, flat config mapping, low-speed-cutoff encode/decode).
+- **Device-address register removed entirely** (FR-MB07/FR-MB26) — the
+  Modbus slave address is hardware-configured only (build define + PC4
+  solder jumper) and was never actually readable/writable on the real DUT;
+  the tester's "Device address" write field is gone from both Wind tabs.
+- **New fields surfaced**: gust and seconds-since-pulse (Wind Speed raw
+  card); a low-speed-cutoff holding register (0.1 m/s, 0–50, default 4 —
+  previously just a "planned" TODO, now a real config field with its own
+  Write button); the direction-fault sentinel (red badge on Wind Direction
+  when the pot wiper floats for >2s).
+- **Scoping decision**: measurement-relevant fields got full decode + GUI
+  support; pure protocol/device diagnostics that also live in the same
+  12-register block (status bitfield, identification, uptime, CRC-error
+  count, request count) stay documented and reachable via Register Explorer
+  but without dedicated decode/GUI, to avoid the task growing into a full
+  diagnostics dashboard.
+- **Real bug found and fixed along the way**: `GET /api/v1/spec`'s response
+  buffer (`char buf[2048]`) truncated once `DUT_REGISTER_SNAPSHOT_JSON` grew
+  to describe the full 12+4-register map with `active_on` tags — caught via
+  a real `ConvertFrom-Json` parse error on hardware at byte 2047. Bumped to
+  `char buf[4096]`; re-verified valid JSON with correct register counts live
+  on the device.
+- Docs brought in line with the new model: `manual/windTesters.md` (full
+  rewrite), `scratchbook.md` §5/§6.2/§7, `api.md` §4.2/§5.1/§5.5/§6 (worked
+  examples use real computed CRC16s, per this project's practice of never
+  leaving fabricated-looking hex in docs), `completeRealisationPlan.md`
+  TASK-WIND, `whatsNext.md` §4.
+- **143/143 native tests pass.** No version bump yet — this is a
+  correctness fix to match the DUT's spec, not new tester capability, so it
+  would land as a patch (0.4.2 → 0.4.3) if/when tagged; not yet requested.
 
 ---
 

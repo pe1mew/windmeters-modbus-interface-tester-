@@ -105,34 +105,42 @@ void test_wind_json_no_data_direction(void)
 
 void test_wind_json_speed_with_data(void)
 {
-    /* Speed half of scratchbook.md §7's Wind Test mockup. */
+    /* Speed half of scratchbook.md §7's Wind Test mockup, plus the
+     * TDS §2.7 gust/seconds-since-pulse fields added 2026-07-02. */
     wind_reading_t reading;
     memset(&reading, 0, sizeof(reading));
-    reading.speed_instant_ms = 4.2f;
-    reading.speed_avg_ms     = 3.9f;
-    reading.raw_pulses       = 27;
+    reading.speed_instant_ms    = 4.2f;
+    reading.speed_avg_ms        = 3.9f;
+    reading.raw_diagnostic      = 27;
+    reading.gust_ms             = 6.5f;
+    reading.seconds_since_pulse = 8;
 
     char buf[256];
     web_core_build_wind_json(buf, sizeof(buf), WIND_SENSOR_SPEED, &reading, true, 420);
     TEST_ASSERT_EQUAL_STRING(
         "{\"type\":\"wind\",\"sensor_type\":\"speed\",\"has_data\":true,"
-        "\"speed_instant_ms\":4.2,\"speed_avg_ms\":3.9,\"raw_pulses\":27,\"age_ms\":420}",
+        "\"speed_instant_ms\":4.2,\"speed_avg_ms\":3.9,\"raw_pulses\":27,"
+        "\"gust_ms\":6.5,\"seconds_since_pulse\":8,\"age_ms\":420}",
         buf);
 }
 
 void test_wind_json_direction_with_data(void)
 {
-    /* Direction half of scratchbook.md §7's Wind Test mockup. */
+    /* Direction half of scratchbook.md §7's Wind Test mockup, plus the
+     * TDS §2.7 dir_fault/raw_adc fields added 2026-07-02. */
     wind_reading_t reading;
     memset(&reading, 0, sizeof(reading));
     reading.dir_instant_deg = 183.4f;
     reading.dir_avg_deg     = 181.0f;
+    reading.dir_fault       = false;
+    reading.raw_diagnostic  = 512;
 
     char buf[256];
     web_core_build_wind_json(buf, sizeof(buf), WIND_SENSOR_DIRECTION, &reading, true, 420);
     TEST_ASSERT_EQUAL_STRING(
         "{\"type\":\"wind\",\"sensor_type\":\"direction\",\"has_data\":true,"
-        "\"dir_instant_deg\":183.4,\"dir_avg_deg\":181.0,\"age_ms\":420}",
+        "\"dir_instant_deg\":183.4,\"dir_avg_deg\":181.0,\"dir_fault\":false,"
+        "\"raw_adc\":512,\"age_ms\":420}",
         buf);
 }
 
@@ -408,35 +416,42 @@ void test_api_wind_json_active_no_data_yet(void)
 
 void test_api_wind_json_speed_with_data(void)
 {
-    /* Speed half of scratchbook.md §7's worked example. */
+    /* Speed half of scratchbook.md §7's worked example, plus TDS §2.7's
+     * gust/seconds-since-pulse fields added 2026-07-02. */
     wind_reading_t reading;
     memset(&reading, 0, sizeof(reading));
-    reading.speed_instant_ms = 4.2f;
-    reading.speed_avg_ms     = 3.9f;
-    reading.raw_pulses       = 27;
+    reading.speed_instant_ms    = 4.2f;
+    reading.speed_avg_ms        = 3.9f;
+    reading.raw_diagnostic      = 27;
+    reading.gust_ms             = 6.5f;
+    reading.seconds_since_pulse = 8;
 
     char buf[256];
     web_core_build_api_wind_json(buf, sizeof(buf), 30, WIND_SENSOR_SPEED, true, &reading, true, 420);
     TEST_ASSERT_EQUAL_STRING(
         "{\"ok\":true,\"has_data\":true,\"target\":30,\"sensor_type\":\"speed\","
         "\"speed_instant_ms\":4.2,\"speed_avg_ms\":3.9,"
-        "\"raw_pulses\":27,\"age_ms\":420}",
+        "\"raw_pulses\":27,\"gust_ms\":6.5,\"seconds_since_pulse\":8,\"age_ms\":420}",
         buf);
 }
 
 void test_api_wind_json_direction_with_data(void)
 {
-    /* Direction half of scratchbook.md §7's worked example. */
+    /* Direction half of scratchbook.md §7's worked example, plus TDS
+     * §2.7's dir_fault/raw_adc fields added 2026-07-02. */
     wind_reading_t reading;
     memset(&reading, 0, sizeof(reading));
     reading.dir_instant_deg = 183.4f;
     reading.dir_avg_deg     = 181.0f;
+    reading.dir_fault       = false;
+    reading.raw_diagnostic  = 512;
 
     char buf[256];
     web_core_build_api_wind_json(buf, sizeof(buf), 31, WIND_SENSOR_DIRECTION, true, &reading, true, 420);
     TEST_ASSERT_EQUAL_STRING(
         "{\"ok\":true,\"has_data\":true,\"target\":31,\"sensor_type\":\"direction\","
-        "\"dir_instant_deg\":183.4,\"dir_avg_deg\":181.0,\"age_ms\":420}",
+        "\"dir_instant_deg\":183.4,\"dir_avg_deg\":181.0,\"dir_fault\":false,"
+        "\"raw_adc\":512,\"age_ms\":420}",
         buf);
 }
 

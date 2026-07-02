@@ -383,14 +383,18 @@ expressed per-type rather than per-field). Full register maps:
 - Updates shared wind state under mutex; feeds the WebSocket `wind.*`
   fields (tagged `sensor_type`), including `age_ms` since the last
   successful poll so the UI can show staleness.
-- On a config-read request: FC03 reads that type's 3 holding registers
-  (`0x0000`–`0x0002`). On a config-write request: FC06 write-back of the
-  single changed field — device address and averaging window exist on
-  both types; direction offset is Direction-only, measurement window is
-  Speed-only (`wind_config_field_register()` returns "field doesn't exist
-  for this type," never touching the wire, if asked for the wrong one) —
+- On a config-read request: FC03 reads all 4 holding registers
+  (`0x0000`–`0x0003`) — identical addresses on both types as of the DUT's
+  TDS v0.6 (FR-MB27; earlier in this project each type had its own
+  register positions, and `wind_config_field_register()` took a `type`
+  parameter to resolve them — removed once the TDS settled on one shared
+  map, since there was nothing left for `type` to disambiguate). On a
+  config-write request: FC06 write-back of the single changed field —
   never a blind FC16 of everything, so a typo in one field can't clobber
-  the others.
+  the others. There is no device-address field (TDS v0.6 removed that
+  register entirely, FR-MB07/FR-MB26); direction offset and low-speed
+  cutoff are exposed on their respective type's tab only, even though the
+  wire protocol accepts either write regardless of type.
 - Suspended (no polling, no bus traffic) when neither Wind tab is active;
   switching which type is active (e.g. starting Speed while Direction was
   running) stops the previous type's polling — there is exactly one

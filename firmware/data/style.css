@@ -75,6 +75,7 @@ h3 { font-size: .9rem; color: var(--muted); margin-bottom: .4rem; }
 .badge.offline { background: var(--red);   color: #fff; }
 .badge.ntp-on  { background: var(--green); color: #fff; }
 .badge.ntp-off { background: #444;         color: var(--muted); }
+.badge.fault   { background: var(--red);   color: #fff; margin-top: .3rem; }
 
 /* ── Form rows ───────────────────────────────────────────────────── */
 .row {

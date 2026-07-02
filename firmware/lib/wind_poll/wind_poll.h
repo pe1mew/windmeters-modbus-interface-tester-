@@ -3,76 +3,105 @@
  * @brief Wind Test — the testable decode/config core (TASK-WIND,
  *        design/completeRealisationPlan.md).
  *
- * Register map and scaling from design/scratchbook.md §5 — raw addresses,
- * ×10 (NOT the S200's ×1000, see the scaling gotcha there). This file has
- * no queue/task/UART calls, so it's host-testable; the actual periodic
- * FC04 poll and FC06 config writes through modbus_master_task's queue are
- * wind_poll_task.cpp (Arduino-only).
+ * Register map and scaling from the DUT's own Technical Design
+ * Specification (`windmeters-modbus-interface/design/TDS.md` §2.7/§2.8,
+ * v0.6) — this file has no queue/task/UART calls, so it's host-testable;
+ * the actual periodic FC04 poll and FC06 config writes through
+ * modbus_master_task's queue are wind_poll_task.cpp (Arduino-only).
  *
  * Wind speed and wind direction are two physically separate units, not one
  * combined device — same PCB/firmware source, but a compile-time define
- * picks which sensor a given build reports
- * (windmeters-modbus-interface/design/scratchBook.md "Modbus configuration"),
- * with its own slave address (speed: 30, or 35 jumpered; direction: 31, or
- * 36 jumpered) and its own compact register numbering starting at 0x0000.
- * Every function below that touches registers takes a wind_sensor_type_t so
- * it reads/writes only the registers that type's firmware actually has.
+ * picks which sensor a given build reports, with its own slave address
+ * (speed: 30, or 35 jumpered; direction: 31, or 36 jumpered — TDS FR-S03).
+ * As of TDS v0.6, both builds implement an *identical* register map at
+ * identical addresses (FR-MB27) — a register the active sensor doesn't use
+ * simply reads 0, rather than the two builds having different maps. That
+ * replaced an earlier (pre-TDS) assumption in this file that each type had
+ * its own compact, different-sized register block — corrected 2026-07-02
+ * once the DUT's TDS matured enough to specify this precisely.
  */
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef enum {
     WIND_SENSOR_SPEED = 0,
     WIND_SENSOR_DIRECTION,
 } wind_sensor_type_t;
 
+/**
+ * @brief One decoded snapshot of the DUT's input register block (TDS
+ * §2.7) — a single 12-register FC04 read starting at raw 0x0000, wire
+ * layout identical on both builds (FR-MB27). Only the fields meaningful
+ * for @p type passed to wind_poll_decode() are populated from real data;
+ * the other type's fields come off the wire as 0 (the DUT reports 0 for a
+ * sensor it doesn't have) and are left that way here, not specially
+ * zeroed — same convention, no divergence to track.
+ *
+ * Device-level protocol diagnostics also live in this input block (status
+ * flags 0x0005, identification 0x0006, uptime 0x0007, CRC-error count
+ * 0x0008, served-request count 0x0009 — TDS §2.7) but aren't decoded here:
+ * they're not wind measurement data, and Register Explorer already reaches
+ * them by raw address without needing dedicated decode/GUI support.
+ */
 typedef struct {
-    float    dir_instant_deg;   /**< WindDirection input reg 0x0000, raw/10. Unused (0) for a WIND_SENSOR_SPEED reading. */
-    float    speed_instant_ms;  /**< WindSpeed input reg 0x0000, raw/10. Unused (0) for a WIND_SENSOR_DIRECTION reading. */
-    float    dir_avg_deg;       /**< WindDirection input reg 0x0001, raw/10. */
-    float    speed_avg_ms;      /**< WindSpeed input reg 0x0001, raw/10. */
-    uint16_t raw_pulses;        /**< WindSpeed input reg 0x0002, unscaled. Speed-only — no anemometer pulses on a direction unit. */
+    float    dir_instant_deg;     /**< 0x0000 (30001), raw/10. 0 on a speed build. */
+    float    speed_instant_ms;    /**< 0x0001 (30002), raw/10. 0 on a direction build. */
+    float    dir_avg_deg;         /**< 0x0002 (30003), raw/10. 0 on a speed build. */
+    float    speed_avg_ms;        /**< 0x0003 (30004), raw/10. 0 on a direction build. */
+    uint16_t raw_diagnostic;      /**< 0x0004 (30005), unscaled — pulse count last window (speed build) or last raw 10-bit ADC conversion (direction build), TDS §2.7. */
+    uint16_t seconds_since_pulse; /**< 0x000A (30011), unscaled seconds since the last anemometer edge — speed build only, 0 on direction (TDS FR-S36). */
+    float    gust_ms;             /**< 0x000B (30012), raw/10 — max single-window speed within the current averaging window — speed build only, 0 on direction (TDS FR-S37). */
+    bool     dir_fault;           /**< True when 0x0000/0x0002 read the TDS FR-S38 fault sentinel (65535) — a floating direction-sensor wiper for >2s. Always false on a speed build (those registers read 0, not 65535, there). */
 } wind_reading_t;
 
 /**
- * @brief Decode a WindSpeed FC04 read (3 registers: speed_instant, speed_avg,
- *        raw_pulses) into engineering units. Leaves the direction fields at 0.
+ * @brief Number of input registers the DUT implements (TDS §2.7) — always
+ * 12 (raw 0x0000-0x000B), identical on both builds (FR-MB27). Read as one
+ * FC04 block starting at 0x0000.
  */
-void wind_poll_decode_speed(const uint16_t raw_registers[3], wind_reading_t *out);
+uint8_t wind_sensor_input_register_count(void);
 
 /**
- * @brief Decode a WindDirection FC04 read (2 registers: dir_instant, dir_avg)
- *        into engineering units. Leaves the speed/pulse fields at 0.
+ * @brief Decode a 12-register FC04 read (TDS §2.7, raw 0x0000-0x000B)
+ * into engineering units for @p type. The wire layout is identical
+ * regardless of type (FR-MB27) — only which fields are meaningful for the
+ * caller differs; see wind_reading_t's field comments.
  */
-void wind_poll_decode_direction(const uint16_t raw_registers[2], wind_reading_t *out);
-
-/** @brief Number of FC04 input registers @p type's firmware implements (3 for speed, 2 for direction). */
-uint8_t wind_sensor_input_register_count(wind_sensor_type_t type);
+void wind_poll_decode(wind_sensor_type_t type, const uint16_t raw_registers[12], wind_reading_t *out);
 
 /**
- * @brief Which config field exists, shared by both sensor types except
- * where noted — the register *number* still depends on @p type (see
- * wind_config_field_register()).
+ * @brief Holding register fields (TDS §2.8) — 4 registers, same
+ * addresses, on both builds (FR-MB27). There is no device-address
+ * register as of TDS v0.6: the Modbus address is hardware-configured only
+ * (build define + PC4 solder jumper, TDS FR-S03/FR-MB07) and cannot be
+ * read or written over Modbus — a write to the old address register's
+ * former address now correctly returns exception 02 (illegal data
+ * address) on real DUT firmware.
  */
 typedef enum {
-    WIND_CFG_DEVICE_ADDR = 0,      /**< Holding reg 0x0000 on both types, unscaled, 1-247. */
-    WIND_CFG_DIR_OFFSET,           /**< Holding reg 0x0001, ×10 degrees — WIND_SENSOR_DIRECTION only. */
-    WIND_CFG_MEASUREMENT_WINDOW,   /**< Holding reg 0x0001, unscaled ms — WIND_SENSOR_SPEED only. */
-    WIND_CFG_AVERAGING_WINDOW,     /**< Holding reg 0x0002 on both types, unscaled seconds. */
+    WIND_CFG_DIR_OFFSET = 0,     /**< Holding reg 0x0000 (40001), 0.1° units, valid range 0-3599, default 0. */
+    WIND_CFG_MEASUREMENT_WINDOW, /**< Holding reg 0x0001 (40002), ms, valid range 100-60000, default 1000. */
+    WIND_CFG_AVERAGING_WINDOW,   /**< Holding reg 0x0002 (40003), s, valid range 1-600 (also subject to the TDS FR-S31 cross-register constraint with the measurement window), default 10. */
+    WIND_CFG_LOW_SPEED_CUTOFF,   /**< Holding reg 0x0003 (40004), 0.1 m/s units, valid range 0-50, default 4. */
 } wind_config_field_t;
 
 /**
- * @brief Raw 0-based holding register address for @p field on @p type's
- * firmware, or 0xFFFF if @p field doesn't exist for that type (e.g.
- * WIND_CFG_DIR_OFFSET on a WIND_SENSOR_SPEED device).
+ * @brief Raw 0-based holding register address for @p field (TDS §2.8) —
+ * a fixed mapping, identical on both builds (FR-MB27), unlike the
+ * pre-TDS-v0.6 design this replaced where the address depended on sensor
+ * type.
  */
-uint16_t wind_config_field_register(wind_sensor_type_t type, wind_config_field_t field);
+uint16_t wind_config_field_register(wind_config_field_t field);
 
-/** @brief Number of holding registers @p type's firmware implements (3 for both types today). */
-uint8_t wind_sensor_holding_register_count(wind_sensor_type_t type);
+/**
+ * @brief Number of holding registers the DUT implements (TDS §2.8) —
+ * always 4 (raw 0x0000-0x0003), identical on both builds.
+ */
+uint8_t wind_sensor_holding_register_count(void);
 
-/** @brief Engineering-unit value -> raw register value to write via FC06. */
+/** @brief Engineering-unit value -> raw register value to write via FC06 (TDS §2.8 scaling). */
 uint16_t wind_config_field_encode(wind_config_field_t field, float value);
 
 /** @brief Raw register value (from an FC03 read) -> engineering-unit value. */

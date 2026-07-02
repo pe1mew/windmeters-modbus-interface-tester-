@@ -181,14 +181,19 @@ function handleWind(w) {
   const otherPrefix   = (activePrefix === 'wspd') ? 'wdir' : 'wspd';
 
   if (w.sensor_type === 'speed') {
-    setText('wspd-instant', fmt(w.speed_instant_ms));
-    setText('wspd-avg',     fmt(w.speed_avg_ms));
-    setText('wspd-pulses',  w.raw_pulses !== undefined ? w.raw_pulses : '—');
-    setText('wspd-age',     w.age_ms     !== undefined ? w.age_ms     : '—');
+    setText('wspd-instant',     fmt(w.speed_instant_ms));
+    setText('wspd-avg',         fmt(w.speed_avg_ms));
+    setText('wspd-pulses',      w.raw_pulses           !== undefined ? w.raw_pulses           : '—');
+    setText('wspd-gust',        fmt(w.gust_ms));
+    setText('wspd-since-pulse', w.seconds_since_pulse  !== undefined ? w.seconds_since_pulse  : '—');
+    setText('wspd-age',         w.age_ms               !== undefined ? w.age_ms               : '—');
   } else {
     setText('wdir-instant', fmt(w.dir_instant_deg));
     setText('wdir-avg',     fmt(w.dir_avg_deg));
-    setText('wdir-age',     w.age_ms !== undefined ? w.age_ms : '—');
+    setText('wdir-adc',     w.raw_adc !== undefined ? w.raw_adc : '—');
+    setText('wdir-age',     w.age_ms  !== undefined ? w.age_ms  : '—');
+    const faultEl = document.getElementById('wdir-fault');
+    if (faultEl) faultEl.style.display = w.dir_fault ? 'inline-block' : 'none';
   }
 
   // Only one sensor is ever actually polling — receiving an update for one
@@ -208,9 +213,12 @@ function postWindConfigRead(type) {
       if (statusEl) statusEl.textContent = 'Read failed.';
       return;
     }
-    document.getElementById(prefix + '-cfg-addr').value = r.device_addr;
+    // All 4 holding registers exist identically on both builds (TDS §2.7
+    // FR-MB27) — the response always carries all 4; each tab just picks
+    // out the ones it shows.
     if (type === 'speed') {
-      document.getElementById('wspd-cfg-meas').value = r.measurement_window_ms;
+      document.getElementById('wspd-cfg-meas').value   = r.measurement_window_ms;
+      document.getElementById('wspd-cfg-cutoff').value = r.low_speed_cutoff_ms;
     } else {
       document.getElementById('wdir-cfg-offset').value = r.dir_offset_deg;
     }
@@ -222,11 +230,13 @@ function postWindConfigRead(type) {
 function postWindConfigWrite(type, field) {
   const prefix = windPrefix(type);
   const addr   = parseInt(document.getElementById(prefix + '-addr').value, 10);
+  // No device_addr case — that register no longer exists (TDS v0.6,
+  // FR-MB07/FR-MB26); the Modbus address is hardware-jumper only.
   const fieldInputMap = {
-    device_addr:         prefix + '-cfg-addr',
     dir_offset:           'wdir-cfg-offset',
     measurement_window:   'wspd-cfg-meas',
     averaging_window:     prefix + '-cfg-avg',
+    low_speed_cutoff:     'wspd-cfg-cutoff',
   };
   const inputId  = fieldInputMap[field];
   const value    = parseFloat(document.getElementById(inputId).value);

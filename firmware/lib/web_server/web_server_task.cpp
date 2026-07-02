@@ -319,19 +319,21 @@ static void register_wind_endpoints(void)
         wind_sensor_type_t type = parse_wind_sensor_type(o["type"] | "speed");
         uint8_t addr = o["addr"] | wind_default_addr(type);
         wind_config_t cfg_out;
-        bool ok = wind_poll_read_config(addr, type, &cfg_out);
+        bool ok = wind_poll_read_config(addr, &cfg_out);
 
+        /* All 4 holding registers exist identically on both builds (TDS
+         * §2.7 FR-MB27) — always report all 4, same shape regardless of
+         * type; which ones a tab chooses to show is a GUI concern now,
+         * not a wire-protocol one. */
         char buf[256];
-        if (ok && type == WIND_SENSOR_DIRECTION) {
+        if (ok) {
             snprintf(buf, sizeof(buf),
-                     "{\"ok\":true,\"sensor_type\":\"direction\",\"device_addr\":%u,"
-                     "\"dir_offset_deg\":%.1f,\"averaging_window_s\":%u}",
-                     cfg_out.device_addr, (double)cfg_out.dir_offset_deg, cfg_out.averaging_window_s);
-        } else if (ok) {
-            snprintf(buf, sizeof(buf),
-                     "{\"ok\":true,\"sensor_type\":\"speed\",\"device_addr\":%u,"
-                     "\"measurement_window_ms\":%u,\"averaging_window_s\":%u}",
-                     cfg_out.device_addr, cfg_out.measurement_window_ms, cfg_out.averaging_window_s);
+                     "{\"ok\":true,\"sensor_type\":\"%s\","
+                     "\"dir_offset_deg\":%.1f,\"measurement_window_ms\":%u,"
+                     "\"averaging_window_s\":%u,\"low_speed_cutoff_ms\":%.1f}",
+                     (type == WIND_SENSOR_DIRECTION) ? "direction" : "speed",
+                     (double)cfg_out.dir_offset_deg, cfg_out.measurement_window_ms,
+                     cfg_out.averaging_window_s, (double)cfg_out.low_speed_cutoff_ms);
         } else {
             snprintf(buf, sizeof(buf), "{\"ok\":false}");
         }
@@ -345,15 +347,18 @@ static void register_wind_endpoints(void)
         const char *field_name = o["field"] | "";
         float value = o["value"] | 0.0f;
 
+        /* No device_addr case as of TDS v0.6 — that register no longer
+         * exists (FR-MB07/FR-MB26); the Modbus address is hardware-jumper
+         * only. */
         wind_config_field_t field;
         bool known = true;
-        if      (strcmp(field_name, "device_addr") == 0)         field = WIND_CFG_DEVICE_ADDR;
-        else if (strcmp(field_name, "dir_offset") == 0)           field = WIND_CFG_DIR_OFFSET;
+        if      (strcmp(field_name, "dir_offset") == 0)           field = WIND_CFG_DIR_OFFSET;
         else if (strcmp(field_name, "measurement_window") == 0)   field = WIND_CFG_MEASUREMENT_WINDOW;
         else if (strcmp(field_name, "averaging_window") == 0)     field = WIND_CFG_AVERAGING_WINDOW;
-        else { known = false; field = WIND_CFG_DEVICE_ADDR; }
+        else if (strcmp(field_name, "low_speed_cutoff") == 0)     field = WIND_CFG_LOW_SPEED_CUTOFF;
+        else { known = false; field = WIND_CFG_DIR_OFFSET; }
 
-        bool ok = known && wind_poll_write_config_field(addr, type, field, value);
+        bool ok = known && wind_poll_write_config_field(addr, field, value);
         send_ok(request, ok);
     }));
 }
@@ -583,38 +588,50 @@ static void register_api_v1_endpoints(void)
         request->send(200, "application/json", resp_json);
     }));
 
-    /* Hand-curated snapshot of scratchbook.md §5's current register map —
-     * not derived from wind_poll.h, since that map is explicitly
-     * provisional ("still moving") and this is meant to help a client
-     * bootstrap, not be the source of truth. Update by hand if §5 changes.
+    /* Hand-curated snapshot of the DUT's Technical Design Specification
+     * (windmeters-modbus-interface/design/TDS.md §2.7/§2.8, v0.6) — not
+     * derived from wind_poll.h automatically, so it has to be re-checked
+     * by hand whenever that TDS changes (last done 2026-07-02, when the
+     * TDS matured enough to specify this precisely and superseded this
+     * constant's previous, now-wrong, per-type-different-map assumption).
+     * This is meant to help a client bootstrap, not be the source of
+     * truth — the TDS is.
      *
-     * Wind speed and wind direction are separate physical units at
-     * separate addresses (wind_poll.h) — this was a single combined
-     * 5-input/4-holding map before that split and went stale when the
-     * split landed (2026-07-02), since nothing re-generates this constant
-     * automatically. Keyed by sensor_type ("speed"/"direction") to match
-     * the same tag used throughout the WS/API wind payloads. */
+     * TDS v0.6 FR-MB27: both builds implement one *identical* 12-input/
+     * 4-holding register map at identical addresses — a register the
+     * active build doesn't use just reads 0, rather than the two builds
+     * having different maps (which is what this constant assumed before
+     * v0.6). So there's one "wind" map here, not a wind_speed/
+     * wind_direction split — "active_on" flags which build(s) a register
+     * carries real data on. There is no device-address register as of
+     * v0.6 (FR-MB07/FR-MB26) — the Modbus address is hardware-jumper only. */
     static const char DUT_REGISTER_SNAPSHOT_JSON[] =
-        "{\"wind_speed\":{\"input_registers\":["
-        "{\"addr\":0,\"name\":\"speed_instant\",\"unit\":\"0.1 m/s\"},"
-        "{\"addr\":1,\"name\":\"speed_avg\",\"unit\":\"0.1 m/s\"},"
-        "{\"addr\":2,\"name\":\"raw_pulses\",\"unit\":\"pulses/interval\"}"
+        "{\"wind\":{\"input_registers\":["
+        "{\"addr\":0,\"name\":\"dir_instant\",\"unit\":\"0.1 deg\",\"active_on\":[\"direction\"]},"
+        "{\"addr\":1,\"name\":\"speed_instant\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\"]},"
+        "{\"addr\":2,\"name\":\"dir_avg\",\"unit\":\"0.1 deg\",\"active_on\":[\"direction\"]},"
+        "{\"addr\":3,\"name\":\"speed_avg\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\"]},"
+        "{\"addr\":4,\"name\":\"raw_diagnostic\",\"unit\":\"pulses (speed) or raw ADC (direction)\",\"active_on\":[\"speed\",\"direction\"]},"
+        "{\"addr\":5,\"name\":\"status_flags\",\"unit\":\"bitfield\",\"active_on\":[\"speed\",\"direction\"]},"
+        "{\"addr\":6,\"name\":\"identification\",\"unit\":\"build_type<<8|fw_version\",\"active_on\":[\"speed\",\"direction\"]},"
+        "{\"addr\":7,\"name\":\"uptime_s\",\"unit\":\"s\",\"active_on\":[\"speed\",\"direction\"]},"
+        "{\"addr\":8,\"name\":\"crc_error_count\",\"active_on\":[\"speed\",\"direction\"]},"
+        "{\"addr\":9,\"name\":\"served_request_count\",\"active_on\":[\"speed\",\"direction\"]},"
+        "{\"addr\":10,\"name\":\"seconds_since_pulse\",\"unit\":\"s\",\"active_on\":[\"speed\"]},"
+        "{\"addr\":11,\"name\":\"gust\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\"]}"
         "],\"holding_registers\":["
-        "{\"addr\":0,\"name\":\"device_addr\",\"range\":[1,247]},"
-        "{\"addr\":1,\"name\":\"measurement_window_ms\"},"
-        "{\"addr\":2,\"name\":\"averaging_window_s\"}"
-        "]},"
-        "\"wind_direction\":{\"input_registers\":["
-        "{\"addr\":0,\"name\":\"dir_instant\",\"unit\":\"0.1 deg\"},"
-        "{\"addr\":1,\"name\":\"dir_avg\",\"unit\":\"0.1 deg\"}"
-        "],\"holding_registers\":["
-        "{\"addr\":0,\"name\":\"device_addr\",\"range\":[1,247]},"
-        "{\"addr\":1,\"name\":\"dir_offset\",\"unit\":\"0.1 deg\"},"
-        "{\"addr\":2,\"name\":\"averaging_window_s\"}"
+        "{\"addr\":0,\"name\":\"dir_offset\",\"unit\":\"0.1 deg\",\"range\":[0,3599]},"
+        "{\"addr\":1,\"name\":\"measurement_window_ms\",\"range\":[100,60000]},"
+        "{\"addr\":2,\"name\":\"averaging_window_s\",\"range\":[1,600]},"
+        "{\"addr\":3,\"name\":\"low_speed_cutoff\",\"unit\":\"0.1 m/s\",\"range\":[0,50]}"
         "]}}";
 
     s_server.on("/api/v1/spec", HTTP_GET, [](AsyncWebServerRequest *request) {
-        char buf[2048];
+        /* 2048 silently truncated (invalid JSON) once the TDS v0.6 register
+         * snapshot grew from 5+2 short entries to 12 input + 4 holding
+         * registers with verbose name/unit/active_on fields — 4096 leaves
+         * real headroom instead of just matching today's exact size. */
+        char buf[4096];
         web_core_build_api_spec_json(buf, sizeof(buf), DUT_REGISTER_SNAPSHOT_JSON);
         request->send(200, "application/json", buf);
     });

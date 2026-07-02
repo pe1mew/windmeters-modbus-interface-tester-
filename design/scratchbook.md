@@ -148,67 +148,84 @@ call); no further polarity verification needed.
 
 ## 5. Device under test — current register map
 
-**This will move.** `windmeters-modbus-interface` is 4 commits in, with its
-own `design/scratchBook.md` carrying open TODOs (e.g. a not-yet-implemented
-low-speed cutoff register). Treat everything below as the *current* snapshot,
-not a contract — this is exactly why the Register Explorer (§7) is the
-primary tool here, not a nice-to-have wrapped around a fixed decoder.
+**Authoritative source as of 2026-07-02: the DUT's own Technical Design
+Specification**, `windmeters-modbus-interface/design/TDS.md` §2.7/§2.8
+(v0.6) — a formal, requirement-numbered spec (FR-MB*/FR-S*) that superseded
+this section's earlier, less certain register-map guesses. This section is
+now a summary mirroring that TDS, kept in sync by hand
+(`firmware/lib/wind_poll/wind_poll.h` is the tester's implementation of it)
+— re-check against the TDS directly if the two ever disagree, don't trust
+this copy blindly. The Register Explorer (§7) remains the tool that
+survives the TDS changing again without a tester rebuild.
 
 - MCU: CH32V003J4M6 (RISC-V), transceiver MAX3485, 24 V passive PoE-style
   power over RJ45 (pins 4/5 +, 7/8 −).
 - Two build variants, distinguished by slave address (solder-jumper
-  selectable): wind **speed** (cup anemometer, pulse counting on a hardware
-  timer) at address **30** (or 35 jumpered), wind **direction**
+  selectable, TDS FR-S03): wind **speed** (cup anemometer, pulse counting on
+  a hardware timer) at address **30** (or 35 jumpered), wind **direction**
   (potentiometer, ADC) at address **31** (or 36 jumpered).
-- 9600 8N1 (same as the template/base — no baud config register exists on the
-  DUT yet, unlike the S200 sensor's `0x1001` in the existing greenhouse
-  firmware).
+- 9600 8N1 (TDS FR-MB01). No baud config register — fixed, unlike the S200
+  sensor's `0x1001` in the existing greenhouse firmware.
 
-**Split register maps, not one shared shape (2026-07-02 correction):**
-speed and direction are **physically separate units**, not two personalities
-of one combined device — same PCB/firmware source, but the compile-time
-sensor-type define means a given unit's firmware only implements the
-registers its own sensor type needs, at compact per-device offsets starting
-from `0x0000`. The single 5-input/4-holding table this section used to carry
-was written before that was confirmed and doesn't correspond to either
-variant's actual firmware; corrected below (`firmware/lib/wind_poll/wind_poll.h`
-is the implementation these tables mirror).
+**One identical register map on both builds, not two different maps
+(2026-07-02 correction, TDS v0.6 FR-MB27):** earlier revisions of this
+section assumed wind speed and wind direction implement *different,
+type-specific* register blocks (first a single 5-input/4-holding map shared
+by both, then — once the physical-separation finding landed — two separate,
+differently-sized maps). The DUT's own TDS settled this differently once it
+matured enough to specify it formally: **both builds implement the exact
+same 12-input/4-holding register map at the exact same addresses.** A
+register the active build's sensor doesn't have simply reads 0 rather than
+not existing. There is also **no device-address holding register** as of
+TDS v0.6 (FR-MB07/FR-MB26) — the Modbus address is hardware-configured only
+(build define + PC4 solder jumper) and cannot be read or changed over
+Modbus; a write to the register address that concept used to occupy now
+correctly returns exception 02 (illegal data address).
 
-### Wind Speed (address 30/35) — input registers, FC04 read-only
+### Input registers (FC04, read-only) — TDS §2.7, identical on both builds
 
-| Address (raw) | Modicon # | Content | Unit | Range |
-|---|---|---|---|---|
-| `0x0000` | 30001 | Wind speed, instantaneous | 0.1 m/s | 0–65535 |
-| `0x0001` | 30002 | Wind speed, averaged | 0.1 m/s | 0–65535 |
-| `0x0002` | 30003 | Raw pulse count | pulses/interval | 0–65535 |
+●&nbsp;=&nbsp;carries real data on that build. ○&nbsp;=&nbsp;reads 0 on that build (FR-MB27).
 
-### Wind Speed (address 30/35) — holding registers, FC03 read / FC06 write single
+| Address (raw) | Modicon # | Content | Unit | Range | Speed | Direction |
+|---|---|---|---|---|---|---|
+| `0x0000` | 30001 | Wind direction, instantaneous | 0.1° | 0–3599; 65535 = sensor fault | ○ | ● |
+| `0x0001` | 30002 | Wind speed, instantaneous | 0.1 m/s | 0–65535 | ● | ○ |
+| `0x0002` | 30003 | Wind direction, averaged | 0.1° | 0–3599; 65535 = sensor fault | ○ | ● |
+| `0x0003` | 30004 | Wind speed, averaged | 0.1 m/s | 0–65535 | ● | ○ |
+| `0x0004` | 30005 | Raw diagnostic | build-specific | speed: pulse count last window; direction: last raw 10-bit ADC (0–1023) | ● | ● |
+| `0x0005` | 30006 | Status flags (bitfield) | — | bit0=no window yet, bit1=averaging not filled, bit2=direction fault | ● | ● |
+| `0x0006` | 30007 | Identification | — | high byte = build type, low byte = fw version | ● | ● |
+| `0x0007` | 30008 | Uptime since reset | s | 0–65535, saturating | ● | ● |
+| `0x0008` | 30009 | Bus CRC error count | — | 0–65535, wrapping | ● | ● |
+| `0x0009` | 30010 | Served request count | — | 0–65535, wrapping | ● | ● |
+| `0x000A` | 30011 | Seconds since last pulse | s | 0–65535, clamped | ● | ○ |
+| `0x000B` | 30012 | Gust: max window speed in current averaging window | 0.1 m/s | 0–65535 | ● | ○ |
 
-| Address (raw) | Modicon # | Purpose | Unit | Range |
-|---|---|---|---|---|
-| `0x0000` | 40001 | Device (slave) address | — | 1–247 |
-| `0x0001` | 40002 | Measurement window | ms | default 1000 |
-| `0x0002` | 40003 | Averaging window | s | default 10 |
+The tester decodes and displays the measurement-relevant fields (direction/
+speed instant+average, raw diagnostic, gust, seconds-since-pulse) on their
+respective tabs; the device-level diagnostics (status/identification/
+uptime/CRC-count/request-count) aren't decoded into the GUI — they're real,
+documented registers reachable via Register Explorer, just not wind
+measurement data.
 
-### Wind Direction (address 31/36) — input registers, FC04 read-only
+### Holding registers (FC03 read / FC06 write single / FC16 write multiple) — TDS §2.8, identical on both builds
 
-| Address (raw) | Modicon # | Content | Unit | Range |
-|---|---|---|---|---|
-| `0x0000` | 30001 | Wind direction, instantaneous | 0.1° | 0–3599 |
-| `0x0001` | 30002 | Wind direction, averaged | 0.1° | 0–3599 |
+All registers are **volatile** — reset to the Default column on any reset,
+power-on or otherwise (TDS FR-S21). Both builds accept writes to all 4
+(FR-MB27) even though only some are functionally meaningful per build.
 
-### Wind Direction (address 31/36) — holding registers, FC03 read / FC06 write single
+| Address (raw) | Modicon # | Purpose | Unit | Valid range | Default |
+|---|---|---|---|---|---|
+| `0x0000` | 40001 | Wind direction calibration offset | 0.1° | 0–3599 | 0 |
+| `0x0001` | 40002 | Measurement window duration | ms | 100–60000 | 1000 |
+| `0x0002` | 40003 | Averaging window | s | 1–600 (also constrained relative to the measurement window, TDS FR-S31) | 10 |
+| `0x0003` | 40004 | Low-speed cut-off threshold | 0.1 m/s | 0–50 | 4 |
 
-| Address (raw) | Modicon # | Purpose | Unit | Range |
-|---|---|---|---|---|
-| `0x0000` | 40001 | Device (slave) address | — | 1–247 |
-| `0x0001` | 40002 | Direction calibration offset | 0.1° | 0–3599 |
-| `0x0002` | 40003 | Averaging window | s | default 10 |
-
-The low-speed cutoff register from the original combined table (planned,
-not yet in DUT firmware per its own TODO) would land on Wind Speed if it
-ever ships — nothing currently reserves a slot for it on either map since
-neither has a `0x0003`.
+The tester's Wind Speed tab exposes measurement window, averaging window,
+and low-speed cutoff; Wind Direction exposes direction offset and averaging
+window — matching which fields are functionally relevant per build, even
+though the wire-level map no longer restricts which registers a given
+build's writes will accept.
 
 > ⚠️ **Scaling gotcha:** this DUT encodes at **×10** (implied one decimal
 > place). The S200 sensor already integrated into greenhouse-Controller's
@@ -261,7 +278,7 @@ lib_deps =
 |---|---|---|
 | `modbus_master_task` | Highest | Sole owner of the RS-485 UART. Executes one queued transaction (probe / read / write) at a time, enforces timeout + inter-frame gap, posts every TX/RX frame to the log queue. |
 | `scan_task` | Normal | On request, sweeps an address range through `modbus_master_task`, streams progress + hits to the web UI. Suspended when idle. |
-| `wind_poll_task` | Normal | While either the Wind Speed or Wind Direction tab targets an address (one at a time, §9), polls that type's own input registers (§5) at a configurable interval via `modbus_master_task`; updates shared state under mutex. Suspended when idle. |
+| `wind_poll_task` | Normal | While either the Wind Speed or Wind Direction tab targets an address (one at a time, §9), polls the shared 12-register input block (§5, identical on both builds) at a configurable interval via `modbus_master_task`, decoding only the fields meaningful for the active type; updates shared state under mutex. Suspended when idle. |
 | `web_server_task` | Normal | HTTP + WebSocket server. Unchanged from template. |
 | `wifi_manager_task` | Normal | AP/STA switching, mDNS. Unchanged from template. |
 | `ntp_task` | Normal | Time sync, used only to timestamp the traffic log. Unchanged from template. |
@@ -329,10 +346,11 @@ Sections, replacing the template's sensor-config section with scan/test/explore:
   direction are physically separate DUT units at separate addresses (§5),
   so a single panel covering both no longer matched the hardware. Each tab
   has its own register-map reference table (§5), slave-address + poll-interval
-  controls, live decoded values, and a config form scoped to that type's own
-  holding registers (Wind Speed: device address/measurement window/averaging
-  window; Wind Direction: device address/direction offset/averaging window)
-  with FC06 write-back. Only one of the two can poll at a time in v1 — same
+  controls, live decoded values, and a config form scoped to the holding
+  registers functionally relevant to that type (Wind Speed: measurement
+  window/averaging window/low-speed cutoff; Wind Direction: direction
+  offset/averaging window — no device-address field on either as of TDS
+  v0.6, §5) with FC06 write-back. Only one of the two can poll at a time in v1 — same
   "one target at a time" constraint as the original combined panel, just now
   expressed as "one *tab*, not one *field of a shared panel*" (§9). Starting
   one tab's poll silently stops the other's if it was running; the GUI
@@ -395,12 +413,15 @@ and `wind` are new:
 // type: "wind" — pushed while either Wind Speed or Wind Direction is
 // polling (only one at a time, §9); "sensor_type" tags which tab it's
 // for, and only that type's own fields are present (2026-07-02 split —
-// this used to be one shape carrying both sensor's fields at once)
+// this used to be one shape carrying both sensor's fields at once).
+// gust_ms/seconds_since_pulse and dir_fault/raw_adc added 2026-07-02
+// once the DUT's TDS specified those registers (§5).
 { "type": "wind", "sensor_type": "speed", "has_data": true,
   "speed_instant_ms": 4.2, "speed_avg_ms": 3.9, "raw_pulses": 27,
-  "age_ms": 420 }
+  "gust_ms": 6.5, "seconds_since_pulse": 8, "age_ms": 420 }
 { "type": "wind", "sensor_type": "direction", "has_data": true,
-  "dir_instant_deg": 183.4, "dir_avg_deg": 181.0, "age_ms": 420 }
+  "dir_instant_deg": 183.4, "dir_avg_deg": 181.0, "dir_fault": false,
+  "raw_adc": 512, "age_ms": 420 }
 
 // type: "log" / "log_clear" — unchanged from template
 ```

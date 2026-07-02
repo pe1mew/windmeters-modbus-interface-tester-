@@ -69,14 +69,13 @@ static void wind_poll_task_fn(void * /*pvParameters*/)
         if (s_active) {
             uint32_t interval = cfg_get_u32(CFG_KEY_WIND_POLL_INTERVAL, CFG_DEFAULT_WIND_POLL_INTERVAL);
             if (!s_has_data || wind_poll_interval_elapsed(millis(), s_last_poll_ms, interval)) {
-                uint16_t raw[3]; /* 3 is the larger of the two input-register counts (speed) */
-                uint8_t count = wind_sensor_input_register_count(s_active_type);
+                /* TDS §2.7 (v0.6): both builds implement the same 12-register
+                 * input block (FR-MB27) — always read all 12, not a
+                 * type-conditional 2 or 3 like before that spec matured. */
+                uint16_t raw[12];
+                uint8_t count = wind_sensor_input_register_count();
                 if (do_read_registers(s_target_addr, 0x04, 0x0000, count, raw)) {
-                    if (s_active_type == WIND_SENSOR_SPEED) {
-                        wind_poll_decode_speed(raw, &s_latest);
-                    } else {
-                        wind_poll_decode_direction(raw, &s_latest);
-                    }
+                    wind_poll_decode(s_active_type, raw, &s_latest);
                     s_has_data     = true;
                     s_last_poll_ms = millis();
                 }
@@ -129,29 +128,29 @@ uint32_t wind_poll_age_ms(void)
     return millis() - s_last_poll_ms;
 }
 
-bool wind_poll_read_config(uint8_t addr, wind_sensor_type_t type, wind_config_t *out)
+bool wind_poll_read_config(uint8_t addr, wind_config_t *out)
 {
-    uint16_t raw[3]; /* both types: device_addr, {dir_offset|measurement_window}, averaging_window */
-    uint8_t count = wind_sensor_holding_register_count(type);
+    /* TDS §2.8 (v0.6): 4 holding registers, identical addresses/meaning
+     * regardless of sensor type (FR-MB27) — no more type-conditional
+     * "which field is at raw[1]" branching, and no device_addr field
+     * (that register no longer exists, FR-MB07/FR-MB26). */
+    uint16_t raw[4];
+    uint8_t count = wind_sensor_holding_register_count();
     if (!do_read_registers(addr, 0x03, 0x0000, count, raw)) {
         return false;
     }
-    memset(out, 0, sizeof(*out));
-    out->device_addr = (uint8_t)wind_config_field_decode(WIND_CFG_DEVICE_ADDR, raw[0]);
-    if (type == WIND_SENSOR_DIRECTION) {
-        out->dir_offset_deg = wind_config_field_decode(WIND_CFG_DIR_OFFSET, raw[1]);
-    } else {
-        out->measurement_window_ms = (uint16_t)wind_config_field_decode(WIND_CFG_MEASUREMENT_WINDOW, raw[1]);
-    }
-    out->averaging_window_s = (uint16_t)wind_config_field_decode(WIND_CFG_AVERAGING_WINDOW, raw[2]);
+    out->dir_offset_deg        = wind_config_field_decode(WIND_CFG_DIR_OFFSET, raw[0]);
+    out->measurement_window_ms = (uint16_t)wind_config_field_decode(WIND_CFG_MEASUREMENT_WINDOW, raw[1]);
+    out->averaging_window_s    = (uint16_t)wind_config_field_decode(WIND_CFG_AVERAGING_WINDOW, raw[2]);
+    out->low_speed_cutoff_ms   = wind_config_field_decode(WIND_CFG_LOW_SPEED_CUTOFF, raw[3]);
     return true;
 }
 
-bool wind_poll_write_config_field(uint8_t addr, wind_sensor_type_t type, wind_config_field_t field, float value)
+bool wind_poll_write_config_field(uint8_t addr, wind_config_field_t field, float value)
 {
-    uint16_t reg = wind_config_field_register(type, field);
+    uint16_t reg = wind_config_field_register(field);
     if (reg == 0xFFFF) {
-        return false; /* field doesn't exist for this sensor type — never touch the wire */
+        return false; /* unknown field enum value — never touch the wire */
     }
     uint16_t raw_value = wind_config_field_encode(field, value);
     return do_write_single(addr, reg, raw_value);

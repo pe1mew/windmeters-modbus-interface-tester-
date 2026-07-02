@@ -299,10 +299,11 @@ not one:
    decode is checked against real register values instead of
    hand-constructed native-test fixtures.
 4. Run the DUT-specific half of **INT-06** — holding-register config
-   write-back via each type's own tab (Wind Speed: device address/
-   measurement window/averaging window; Wind Direction: device address/
-   direction offset/averaging window), not just the emulator's FG6485A
-   stand-in.
+   write-back via each type's own tab (Wind Speed: measurement window/
+   averaging window/low-speed cutoff; Wind Direction: direction offset/
+   averaging window), not just the emulator's FG6485A stand-in. No
+   device-address case — TDS v0.6 (FR-MB07/FR-MB26) removed that register;
+   the slave address is hardware-jumpered only.
 5. **Regression pass whenever the DUT's register map changes upstream**
    (`scratchbook.md` §8 step 13). The register map was noted as "4 commits
    old and still moving" when this project started — re-check

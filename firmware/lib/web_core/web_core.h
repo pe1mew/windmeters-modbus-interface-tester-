@@ -39,10 +39,14 @@ int web_core_build_scan_json(char *out, size_t out_size, const bus_scan_status_t
  * @brief Build the `type:"wind"` WebSocket payload.
  *
  * Wind speed and wind direction are physically separate units
- * (wind_poll.h) — this emits only the fields @p type's firmware actually
- * has (speed_instant_ms/speed_avg_ms/raw_pulses, or dir_instant_deg/
- * dir_avg_deg), tagged with `"sensor_type"` so the GUI's two Wind tabs
- * know which one an update belongs to.
+ * (wind_poll.h) — this emits only the fields meaningful for @p type
+ * (speed_instant_ms/speed_avg_ms/raw_pulses/gust_ms/seconds_since_pulse,
+ * or dir_instant_deg/dir_avg_deg/dir_fault/raw_adc), tagged with
+ * `"sensor_type"` so the GUI's two Wind tabs know which one an update
+ * belongs to. Both branches decode from the same wind_reading_t (TDS
+ * §2.7's register block is identical on both builds, FR-MB27) — the
+ * split here is purely about which of its fields are worth surfacing to
+ * that tab, not a wire-format difference.
  */
 int web_core_build_wind_json(char *out, size_t out_size, wind_sensor_type_t type,
                               const wind_reading_t *reading, bool has_data, uint32_t age_ms);

@@ -10,6 +10,49 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Wind register map reconciled against the DUT's Technical Design
+  Specification, which matured to v0.6 (FR-MB27) since the wind
+  speed/direction split: both sensor types now share one identical
+  12-input-register (`0x0000`–`0x000B`) + 4-holding-register
+  (`0x0000`–`0x0003`) map at the same addresses, rather than each type
+  having its own differently-shaped map as previously assumed.
+  `wind_poll_decode()` now reads the full register block into a unified
+  `wind_reading_t` for both types; `wind_config_field_register()` dropped
+  its `type` parameter since there's no longer a per-type address to
+  disambiguate.
+- `manual/windTesters.md`, `design/scratchbook.md`, `design/api.md`,
+  `design/completeRealisationPlan.md`, and `design/whatsNext.md` updated to
+  match — including `api.md`'s worked examples, recomputed with real CRC16
+  values.
+
+### Added
+
+- Low-speed-cutoff holding register (`0x0003`, 0.1 m/s, range 0–50, default
+  4) — previously documented as a "planned, not yet implemented" TODO, now
+  a real config field with its own Write button on the Wind Speed tab.
+- Gust and seconds-since-pulse input registers surfaced on the Wind Speed
+  tab's Raw card.
+- Direction sensor-fault sentinel (`65535` on `dir_instant`/`dir_avg`, per
+  FR-S38 — a floating potentiometer wiper for >2 s) surfaced as a red
+  "Sensor fault" badge on the Wind Direction tab.
+
+### Removed
+
+- "Device address" holding-register write field on both Wind tabs. TDS v0.6
+  (FR-MB07/FR-MB26) confirmed the Modbus slave address is hardware-configured
+  only (compile-time build define + PC4 solder jumper) and was never
+  actually readable or writable over Modbus — the field the tester exposed
+  never worked against the real DUT.
+
+### Fixed
+
+- `GET /api/v1/spec`'s response buffer (`char buf[2048]`) truncated once
+  the DUT register snapshot grew to describe the full 12+4-register map —
+  caught via a real `ConvertFrom-Json` parse failure on hardware at byte
+  2047. Bumped to `char buf[4096]`.
+
 ---
 
 ## [0.4.2] - 2026-07-02

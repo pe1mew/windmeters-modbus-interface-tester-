@@ -16,11 +16,19 @@
 
 #include "wind_poll.h"
 
+/**
+ * @brief All 4 holding registers, decoded (TDS §2.8) — same 4 fields at
+ * the same addresses regardless of sensor type (FR-MB27); which ones are
+ * functionally meaningful for a given build is a GUI-layer concern now,
+ * not a wire-protocol one (unlike before TDS v0.6, when the register
+ * *addresses* themselves depended on type). There is no device_addr field
+ * — that register no longer exists (FR-MB07/FR-MB26).
+ */
 typedef struct {
-    uint8_t  device_addr;           /**< Holding reg 0x0000, both types. */
-    float    dir_offset_deg;        /**< Holding reg 0x0001, decoded — meaningful for WIND_SENSOR_DIRECTION only. */
-    uint16_t measurement_window_ms; /**< Holding reg 0x0001 — meaningful for WIND_SENSOR_SPEED only. */
-    uint16_t averaging_window_s;    /**< Holding reg 0x0002, both types. */
+    float    dir_offset_deg;        /**< Holding reg 0x0000 (40001), 0.1°. */
+    uint16_t measurement_window_ms; /**< Holding reg 0x0001 (40002), ms. */
+    uint16_t averaging_window_s;    /**< Holding reg 0x0002 (40003), s. */
+    float    low_speed_cutoff_ms;   /**< Holding reg 0x0003 (40004), 0.1 m/s. */
 } wind_config_t;
 
 /** @brief Start the task. modbus_master_task_start() must already have run. */
@@ -50,10 +58,19 @@ bool wind_poll_has_data(void);
 /** @brief Milliseconds since the last successful poll, or UINT32_MAX if wind_poll_has_data() is false. */
 uint32_t wind_poll_age_ms(void);
 
-/** @brief Bulk FC03 read of @p type's holding registers, decoded. Blocks on the real transaction. */
-bool wind_poll_read_config(uint8_t addr, wind_sensor_type_t type, wind_config_t *out);
+/**
+ * @brief Bulk FC03 read of all 4 holding registers, decoded (TDS §2.8).
+ * No @p type parameter — the register block is identical regardless of
+ * sensor type as of TDS v0.6 (FR-MB27). Blocks on the real transaction.
+ */
+bool wind_poll_read_config(uint8_t addr, wind_config_t *out);
 
-/** @brief FC06 write of just @p field's register (must be valid for @p type) — never a blind write of the whole block. Blocks on the real transaction. */
-bool wind_poll_write_config_field(uint8_t addr, wind_sensor_type_t type, wind_config_field_t field, float value);
+/**
+ * @brief FC06 write of just @p field's register — never a blind write of
+ * the whole block, so a typo in one field can't clobber the others. No
+ * @p type parameter, same reason as wind_poll_read_config(). Blocks on
+ * the real transaction.
+ */
+bool wind_poll_write_config_field(uint8_t addr, wind_config_field_t field, float value);
 
 #endif /* ARDUINO */
