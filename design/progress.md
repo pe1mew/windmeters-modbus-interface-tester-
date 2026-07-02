@@ -4,8 +4,8 @@
 |--------------|-------------------------------------------|
 | Document     | Progress Snapshot                         |
 | Project      | Windmeters Modbus Interface Tester        |
-| Date         | 2026-07-01                                |
-| Status       | Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) complete; Phase 3 (Integration Test) not started |
+| Date         | 2026-07-02 (updated)                      |
+| Status       | Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) started opportunistically once a real FG6485A was connected |
 | Related docs | `design/completeRealisationPlan.md` (Parts A/B this reports against), `design/realisationPlan.md` (MB-1/MB-2 detail), `design/scratchbook.md` (design source of truth), `design/whatsNext.md` (what follows this) |
 
 ---
@@ -126,7 +126,62 @@ hardware fault but wasn't: `memory/gotcha-log.md`.
 
 ---
 
-## 7. Repo state
+## 7. Phase 2.5 — Machine API (`design/api.md`)
+
+All 7 endpoints implemented and hardware-verified: `POST /api/v1/modbus`,
+`GET /api/v1/spec`, `GET /api/v1/status`, `GET /api/v1/wind`,
+`GET /api/v1/log`, `POST`/`GET /api/v1/scan`.
+
+**Two correctness fixes to existing code, surfaced while wiring this in —
+neither was a new bug in Phase 2.5's own code, both were latent gaps
+Phase 2.5 was the first thing to actually exercise:**
+
+- `mb_result_t` didn't carry raw TX/RX frames or attempt counts — a caller
+  reading `mb_get_last_tx()`/`_rx()`/`_attempts()` after a FreeRTOS queue
+  hop could get a *different* transaction's bytes if another request had
+  already been processed in between. Fixed by copying them into the result
+  struct inside `mb_master_process()`, while still fresh. Covered by a new
+  native test that specifically proves a held `mb_result_t` survives a
+  second, different transaction running afterward.
+- `modbus_master_task` unconditionally overwrote `mb_timeout_ms`/
+  `mb_retries` from NVS on every transaction — `/api/v1/modbus`'s
+  documented per-request `timeout_ms`/`retries` override would have been
+  silently ignored. Fixed with an opt-in override field on
+  `mb_task_request_t`, defaulting to the existing NVS-sourced behaviour for
+  every other caller. Verified on hardware: `timeout_ms:1000,retries:2` →
+  measured 3 real attempts, ~3.3s wall time, not the NVS default.
+
+**One real bug in `/api/v1/scan` itself, found and fixed via hardware
+testing (native tests couldn't have caught it — the bug is in
+`web_server_task.cpp`'s Arduino-only polling loop, not in the tested
+`bus_scan` core):** the `wait:true` poll loop treated any non-running state
+as "done," including a *stale* `SCAN_COMPLETE` left over from the
+*previous* scan — `scan_task_request_start()` only enqueues a command,
+it doesn't block until `scan_task` actually dequeues it and calls
+`bus_scan_start()`. Every scan after the first one returned instantly with
+the prior scan's result. Fixed by keying "done" off the *current* scan's
+own range showing up on a COMPLETE/CANCELLED status, not just the state
+value in isolation.
+
+**Real bus peer connected mid-session**: an FG6485A at address 1 (Modbus
+RTU, FC03 only). Used to verify `/api/v1/modbus` against genuine sensor
+data (humidity 48.9%, temperature 27.2°C, both physically plausible) and
+`/api/v1/scan` actually finding it (`functions_ok:[4]` — see note below).
+Also surfaced that `bus_scan`'s FC04-only probe strategy depends on the
+target replying with a Modbus exception to an unsupported function code
+rather than staying silent — the FG6485A does (non-standard exception code
+129, not one of the standard 1–11, decoded as `"unknown"` — expected,
+`web_core_exception_name()` only covers the standard table), so it's
+detected, but a device that ignores unsupported FCs outright would be
+missed by a scan even though `/api/v1/modbus` could still talk to it
+directly. Also observed: the very first scan run immediately after a fresh
+boot missed the device (found it on every run since) — not yet
+root-caused, plausibly related to the already-documented
+UART-glitch-right-after-init class of issue in `memory/gotcha-log.md`.
+
+---
+
+## 8. Repo state
 
 Nothing in this repo has been committed since the initial scaffolding
 (`git log`: `09f6567 Initial commit...`, `8edf18a Update`). All Phase 1/
@@ -146,11 +201,12 @@ code path — so it's been replaced with `"test-network"`; tests re-run clean
 
 ---
 
-## 8. What's next
+## 9. What's next
 
-Everything in Parts A and B of `completeRealisationPlan.md` is done. What's
-left is Part C — Integration Test — plus a short list of known refinements.
-See `design/whatsNext.md`.
+Everything in Parts A and B of `completeRealisationPlan.md`, plus Phase 2.5
+(`design/api.md`), is done. What's left is Part C — Integration Test — now
+partially underway opportunistically now that a real bus peer is connected
+— plus a short list of known refinements. See `design/whatsNext.md`.
 
 ---
 

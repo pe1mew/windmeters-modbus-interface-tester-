@@ -42,7 +42,19 @@ function post(url, body) {
   }).then(r => r.ok ? r.json() : null).catch(() => null);
 }
 
+// ── Tabs ─────────────────────────────────────────────────────────────────
+function switchTab(id) {
+  document.querySelectorAll('.tab-panel').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  const panel = document.getElementById('tab-' + id);
+  if (panel) panel.classList.add('active');
+  const btn = document.querySelector('.tab-btn[data-tab="' + id + '"]');
+  if (btn) btn.classList.add('active');
+}
+
 // ── Status ────────────────────────────────────────────────────────────────
+let mbSettingsPopulated = false;
+
 function handleStatus(s) {
   setText('st-wifi-mode', s.wifi_mode || '—');
   setText('st-wifi-ssid', s.wifi_ssid || '—');
@@ -70,14 +82,20 @@ function handleStatus(s) {
   if (s.uptime_s !== undefined) {
     setText('st-uptime', fmtElapsed(s.uptime_s));
   }
+
+  // Populate once from the live (NVS-backed) values so the fields never
+  // load empty — after that, leave them alone so a client mid-edit doesn't
+  // get overwritten by the next status tick.
+  if (!mbSettingsPopulated && s.mb_timeout_ms !== undefined && s.mb_retries !== undefined) {
+    const timeoutEl = document.getElementById('mb-timeout');
+    const retriesEl = document.getElementById('mb-retries');
+    if (timeoutEl) timeoutEl.value = s.mb_timeout_ms;
+    if (retriesEl) retriesEl.value = s.mb_retries;
+    mbSettingsPopulated = true;
+  }
 }
 
 // ── Bus Scanner ──────────────────────────────────────────────────────────
-function setScanRange(start, end) {
-  document.getElementById('scan-start').value = start;
-  document.getElementById('scan-end').value   = end;
-}
-
 function postScanStart() {
   const start = parseInt(document.getElementById('scan-start').value, 10);
   const end   = parseInt(document.getElementById('scan-end').value, 10);
@@ -112,71 +130,106 @@ function handleScan(s) {
   const tbody = document.getElementById('scan-body');
   if (tbody && s.found) {
     tbody.innerHTML = '';
-    s.found.forEach(addr => {
+    s.found.forEach(dev => {
+      // dev is { slave, functions_ok, round_trip_ms } — same shape as
+      // GET/POST /api/v1/scan's found[] (design/api.md §5.3), so the GUI
+      // and the machine API show the same information for the same scan.
       const tr = document.createElement('tr');
-      tr.innerHTML = '<td>' + addr + '</td>';
+      tr.innerHTML = '<td>' + dev.slave + '</td>'
+        + '<td>' + dev.functions_ok.map(fc => 'FC' + fc).join(', ') + '</td>'
+        + '<td>' + dev.round_trip_ms + ' ms</td>';
       tbody.appendChild(tr);
     });
   }
 }
 
-// ── Wind Test ────────────────────────────────────────────────────────────
-function postWindStart() {
-  const addr     = parseInt(document.getElementById('wind-addr').value, 10);
-  const interval = parseInt(document.getElementById('wind-interval').value, 10);
-  post('/wind/start', { addr, interval_ms: interval });
-  const btnStart = document.getElementById('btn-wind-start');
-  const btnStop  = document.getElementById('btn-wind-stop');
-  if (btnStart) btnStart.disabled = true;
-  if (btnStop)  btnStop.disabled  = false;
+// ── Wind Speed / Wind Direction ─────────────────────────────────────────
+// Wind speed and wind direction are separate physical units (wind_poll.h)
+// with their own tab, but only one can poll at a time (wind_poll_task's
+// single s_active_type) — every helper here takes a 'speed'|'direction'
+// type and maps it to that tab's 'wspd-'/'wdir-' element prefix.
+function windPrefix(type) {
+  return (type === 'speed') ? 'wspd' : 'wdir';
 }
 
-function postWindStop() {
+function setWindButtons(prefix, active) {
+  const btnStart = document.getElementById('btn-' + prefix + '-start');
+  const btnStop  = document.getElementById('btn-' + prefix + '-stop');
+  if (btnStart) btnStart.disabled = active;
+  if (btnStop)  btnStop.disabled  = !active;
+}
+
+function postWindStart(type) {
+  const prefix   = windPrefix(type);
+  const addr     = parseInt(document.getElementById(prefix + '-addr').value, 10);
+  const interval = parseInt(document.getElementById(prefix + '-interval').value, 10);
+  post('/wind/start', { type, addr, interval_ms: interval });
+  setWindButtons(prefix, true);
+}
+
+function postWindStop(type) {
   post('/wind/stop', {});
-  const btnStart = document.getElementById('btn-wind-start');
-  const btnStop  = document.getElementById('btn-wind-stop');
-  if (btnStart) btnStart.disabled = false;
-  if (btnStop)  btnStop.disabled  = true;
+  setWindButtons(windPrefix(type), false);
 }
 
 function handleWind(w) {
   function fmt(v) { return (v === undefined || v === null) ? '—' : v.toFixed(1); }
-  setText('wind-dir-instant',   fmt(w.dir_instant_deg));
-  setText('wind-dir-avg',       fmt(w.dir_avg_deg));
-  setText('wind-speed-instant', fmt(w.speed_instant_ms));
-  setText('wind-speed-avg',     fmt(w.speed_avg_ms));
-  setText('wind-pulses',        w.raw_pulses !== undefined ? w.raw_pulses : '—');
-  setText('wind-age',           w.age_ms     !== undefined ? w.age_ms     : '—');
+
+  const activePrefix = windPrefix(w.sensor_type);
+  const otherPrefix   = (activePrefix === 'wspd') ? 'wdir' : 'wspd';
+
+  if (w.sensor_type === 'speed') {
+    setText('wspd-instant', fmt(w.speed_instant_ms));
+    setText('wspd-avg',     fmt(w.speed_avg_ms));
+    setText('wspd-pulses',  w.raw_pulses !== undefined ? w.raw_pulses : '—');
+    setText('wspd-age',     w.age_ms     !== undefined ? w.age_ms     : '—');
+  } else {
+    setText('wdir-instant', fmt(w.dir_instant_deg));
+    setText('wdir-avg',     fmt(w.dir_avg_deg));
+    setText('wdir-age',     w.age_ms !== undefined ? w.age_ms : '—');
+  }
+
+  // Only one sensor is ever actually polling — receiving an update for one
+  // type is proof the other tab's Start/Stop buttons are stale if they
+  // still claim to be running (e.g. this client started Speed while
+  // Direction's Stop button was left enabled from an earlier session).
+  setWindButtons(activePrefix, true);
+  setWindButtons(otherPrefix, false);
 }
 
-function postWindConfigRead() {
-  const addr = parseInt(document.getElementById('wind-addr').value, 10);
-  const statusEl = document.getElementById('wind-config-status');
-  post('/wind/config/read', { addr }).then(r => {
+function postWindConfigRead(type) {
+  const prefix   = windPrefix(type);
+  const addr     = parseInt(document.getElementById(prefix + '-addr').value, 10);
+  const statusEl = document.getElementById(prefix + '-config-status');
+  post('/wind/config/read', { type, addr }).then(r => {
     if (!r || !r.ok) {
       if (statusEl) statusEl.textContent = 'Read failed.';
       return;
     }
-    document.getElementById('wind-cfg-addr').value   = r.device_addr;
-    document.getElementById('wind-cfg-offset').value = r.dir_offset_deg;
-    document.getElementById('wind-cfg-meas').value   = r.measurement_window_ms;
-    document.getElementById('wind-cfg-avg').value    = r.averaging_window_s;
+    document.getElementById(prefix + '-cfg-addr').value = r.device_addr;
+    if (type === 'speed') {
+      document.getElementById('wspd-cfg-meas').value = r.measurement_window_ms;
+    } else {
+      document.getElementById('wdir-cfg-offset').value = r.dir_offset_deg;
+    }
+    document.getElementById(prefix + '-cfg-avg').value = r.averaging_window_s;
     if (statusEl) statusEl.textContent = 'Config read OK.';
   });
 }
 
-function postWindConfigWrite(field) {
-  const addr = parseInt(document.getElementById('wind-addr').value, 10);
+function postWindConfigWrite(type, field) {
+  const prefix = windPrefix(type);
+  const addr   = parseInt(document.getElementById(prefix + '-addr').value, 10);
   const fieldInputMap = {
-    device_addr:         'wind-cfg-addr',
-    dir_offset:           'wind-cfg-offset',
-    measurement_window:   'wind-cfg-meas',
-    averaging_window:     'wind-cfg-avg',
+    device_addr:         prefix + '-cfg-addr',
+    dir_offset:           'wdir-cfg-offset',
+    measurement_window:   'wspd-cfg-meas',
+    averaging_window:     prefix + '-cfg-avg',
   };
-  const inputId = fieldInputMap[field];
-  const value = parseFloat(document.getElementById(inputId).value);
-  const statusEl = document.getElementById('wind-config-status');
-  post('/wind/config/write', { addr, field, value }).then(r => {
+  const inputId  = fieldInputMap[field];
+  const value    = parseFloat(document.getElementById(inputId).value);
+  const statusEl = document.getElementById(prefix + '-config-status');
+  post('/wind/config/write', { type, addr, field, value }).then(r => {
     if (statusEl) statusEl.textContent = (r && r.ok) ? ('Wrote ' + field + ' OK.') : ('Write of ' + field + ' failed.');
   });
 }
@@ -230,7 +283,7 @@ function postModbusSettings() {
 }
 
 // ── Modbus log ───────────────────────────────────────────────────────────
-const LOG_MAX = 30;
+const LOG_MAX = 50;
 
 function appendLog(entry) {
   const tbody = document.getElementById('log-body');

@@ -195,6 +195,76 @@ void test_process_unsupported_fc_does_not_leak_a_prior_calls_frames(void)
     TEST_ASSERT_EQUAL_INT(0, mock_led_history_count());
 }
 
+void test_process_success_populates_raw_tx_rx_and_attempts(void)
+{
+    const uint16_t vals[2] = {0x00AA, 0x00BB};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 31, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+
+    mb_request_t req = {31, 0x03, 0x0000, 2, {0}};
+    mb_result_t result = mb_master_process(&req, 7000);
+
+    TEST_ASSERT_EQUAL_INT(MB_OK, result.status);
+    TEST_ASSERT_EQUAL_UINT16(8, result.raw_tx_len); /* FC03 read request is always 8 bytes */
+    TEST_ASSERT_EQUAL_HEX8(31, result.raw_tx[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x03, result.raw_tx[1]);
+    TEST_ASSERT_EQUAL_UINT16(len, result.raw_rx_len);
+    TEST_ASSERT_EQUAL_HEX8(31, result.raw_rx[0]);
+    TEST_ASSERT_EQUAL_UINT8(1, result.attempts);
+}
+
+void test_process_timeout_populates_raw_tx_only_no_raw_rx(void)
+{
+    mock_transport_queue_timeout();
+
+    mb_request_t req = {31, 0x03, 0x0000, 2, {0}};
+    mb_result_t result = mb_master_process(&req, 8000);
+
+    TEST_ASSERT_EQUAL_INT(MB_ERR_TIMEOUT, result.status);
+    TEST_ASSERT_EQUAL_UINT16(8, result.raw_tx_len);
+    TEST_ASSERT_EQUAL_UINT16(0, result.raw_rx_len);
+    TEST_ASSERT_EQUAL_UINT8(1, result.attempts); /* setUp() uses 0 retries */
+}
+
+void test_process_param_error_leaves_raw_tx_rx_and_attempts_zero(void)
+{
+    mb_request_t req = {31, 0x03, 0x0000, 0 /* count=0, rejected */, {0}};
+    mb_result_t result = mb_master_process(&req, 9000);
+
+    TEST_ASSERT_EQUAL_INT(MB_ERR_PARAM, result.status);
+    TEST_ASSERT_EQUAL_UINT16(0, result.raw_tx_len);
+    TEST_ASSERT_EQUAL_UINT16(0, result.raw_rx_len);
+    TEST_ASSERT_EQUAL_UINT8(0, result.attempts);
+}
+
+void test_process_result_survives_a_second_call_overwriting_mb_cores_scratch_state(void)
+{
+    /* This is the exact hazard design/api.md §4.4 calls out: a caller that
+     * held onto mb_result_t (e.g. across a FreeRTOS queue hop) must still
+     * see ITS OWN transaction's bytes, not whatever mb_core's scratch state
+     * holds by the time it gets around to reading it. */
+    const uint16_t vals_a[2] = {0x1111, 0x2222};
+    uint8_t frame_a[16];
+    uint16_t len_a = build_read_response(frame_a, 31, 0x03, vals_a, 2);
+    mock_transport_queue_response(frame_a, len_a);
+
+    mb_request_t req_a = {31, 0x03, 0x0000, 2, {0}};
+    mb_result_t result_a = mb_master_process(&req_a, 10000);
+
+    /* A second, different transaction runs before the caller above "reads" result_a. */
+    const uint16_t vals_b[2] = {0x3333, 0x4444};
+    uint8_t frame_b[16];
+    uint16_t len_b = build_read_response(frame_b, 44, 0x04, vals_b, 2);
+    mock_transport_queue_response(frame_b, len_b);
+    mb_request_t req_b = {44, 0x04, 0x0000, 2, {0}};
+    mb_master_process(&req_b, 10001);
+
+    /* result_a must still reflect address 31's frame, not address 44's. */
+    TEST_ASSERT_EQUAL_HEX8(31, result_a.raw_tx[0]);
+    TEST_ASSERT_EQUAL_HEX8(31, result_a.raw_rx[0]);
+}
+
 int main(int /*argc*/, char ** /*argv*/)
 {
     UNITY_BEGIN();
@@ -204,5 +274,9 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_process_exception_records_code_and_health);
     RUN_TEST(test_process_param_error_touches_neither_wire_nor_led);
     RUN_TEST(test_process_unsupported_fc_does_not_leak_a_prior_calls_frames);
+    RUN_TEST(test_process_success_populates_raw_tx_rx_and_attempts);
+    RUN_TEST(test_process_timeout_populates_raw_tx_only_no_raw_rx);
+    RUN_TEST(test_process_param_error_leaves_raw_tx_rx_and_attempts_zero);
+    RUN_TEST(test_process_result_survives_a_second_call_overwriting_mb_cores_scratch_state);
     return UNITY_END();
 }

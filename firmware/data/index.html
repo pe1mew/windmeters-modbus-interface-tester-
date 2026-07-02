@@ -13,7 +13,7 @@
   <span id="ws-badge" class="badge offline">Offline</span>
 </header>
 
-<!-- ── Status ──────────────────────────────────────────────────── -->
+<!-- ── Status (always visible) ────────────────────────────────────── -->
 <section>
   <h2>Status</h2>
   <div class="grid4">
@@ -47,8 +47,17 @@
   </div>
 </section>
 
+<!-- ── Tabs ────────────────────────────────────────────────────────── -->
+<nav class="tab-bar">
+  <button class="tab-btn active" data-tab="scanner"   onclick="switchTab('scanner')">Bus Scanner</button>
+  <button class="tab-btn"        data-tab="windspeed"  onclick="switchTab('windspeed')">Wind Speed</button>
+  <button class="tab-btn"        data-tab="winddir"    onclick="switchTab('winddir')">Wind Direction</button>
+  <button class="tab-btn"        data-tab="explorer"   onclick="switchTab('explorer')">Register Explorer</button>
+  <button class="tab-btn"        data-tab="settings"   onclick="switchTab('settings')">System Settings</button>
+</nav>
+
 <!-- ── Bus Scanner ─────────────────────────────────────────────── -->
-<section>
+<section class="tab-panel active" id="tab-scanner">
   <h2>Bus Scanner</h2>
   <div class="row">
     <label>Address range</label>
@@ -58,76 +67,133 @@
     <button id="btn-scan-start" onclick="postScanStart()">&#9654; Start</button>
     <button id="btn-scan-stop" onclick="postScanStop()" disabled>&#9632; Stop</button>
   </div>
-  <div class="row">
-    <label>Presets</label>
-    <button class="btn-sm" onclick="setScanRange(1,247)">Full (1-247)</button>
-    <button class="btn-sm" onclick="setScanRange(30,36)">Windmeter (30-36)</button>
-    <button class="btn-sm" onclick="setScanRange(44,44)">S200 (44)</button>
-  </div>
   <p id="scan-progress" class="hint">Idle.</p>
   <table id="scan-tbl">
-    <thead><tr><th>Address</th></tr></thead>
+    <thead><tr><th>Address</th><th>Functions</th><th>Round trip</th></tr></thead>
     <tbody id="scan-body"></tbody>
   </table>
 </section>
 
-<!-- ── Wind Test ───────────────────────────────────────────────── -->
-<section>
-  <h2>Wind Test</h2>
+<!-- ── Wind Speed ──────────────────────────────────────────────── -->
+<section class="tab-panel" id="tab-windspeed">
+  <h2>Wind Speed</h2>
+  <p class="hint">Separate physical unit from Wind Direction — slave address 30 (or 35 jumpered).</p>
+
+  <table class="reg-tbl">
+    <thead><tr><th>Register</th><th>Addr</th><th>Field</th><th>Scale</th></tr></thead>
+    <tbody>
+      <tr><td>Input (FC04)</td><td>0x0000</td><td>speed_instant</td><td>raw &divide;10 m/s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0001</td><td>speed_avg</td><td>raw &divide;10 m/s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0002</td><td>raw_pulses</td><td>unscaled</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0000</td><td>device_addr</td><td>unscaled, 1-247</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0001</td><td>measurement_window</td><td>unscaled ms</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0002</td><td>averaging_window</td><td>unscaled s</td></tr>
+    </tbody>
+  </table>
+
   <div class="row">
     <label>Slave address</label>
-    <input type="number" id="wind-addr" min="1" max="247" value="31" class="short">
+    <input type="number" id="wspd-addr" min="1" max="247" value="30" class="short">
     <label>Poll interval (ms)</label>
-    <input type="number" id="wind-interval" min="100" value="1000" class="short">
-    <button id="btn-wind-start" onclick="postWindStart()">&#9654; Start</button>
-    <button id="btn-wind-stop" onclick="postWindStop()" disabled>&#9632; Stop</button>
+    <input type="number" id="wspd-interval" min="100" value="1000" class="short">
+    <button id="btn-wspd-start" onclick="postWindStart('speed')">&#9654; Start</button>
+    <button id="btn-wspd-stop" onclick="postWindStop('speed')" disabled>&#9632; Stop</button>
   </div>
+  <p class="hint">Only one wind sensor can poll at a time — starting this stops Wind Direction if it's running.</p>
 
   <div class="grid4">
     <div class="card">
-      <h3>Direction</h3>
-      <p>Instant: <strong id="wind-dir-instant">—</strong> °</p>
-      <p>Average: <strong id="wind-dir-avg">—</strong> °</p>
-    </div>
-    <div class="card">
       <h3>Speed</h3>
-      <p>Instant: <strong id="wind-speed-instant">—</strong> m/s</p>
-      <p>Average: <strong id="wind-speed-avg">—</strong> m/s</p>
+      <p>Instant: <strong id="wspd-instant">—</strong> m/s</p>
+      <p>Average: <strong id="wspd-avg">—</strong> m/s</p>
     </div>
     <div class="card">
       <h3>Raw</h3>
-      <p>Pulses: <strong id="wind-pulses">—</strong></p>
-      <p>Age: <strong id="wind-age">—</strong> ms</p>
+      <p>Pulses: <strong id="wspd-pulses">—</strong></p>
+      <p>Age: <strong id="wspd-age">—</strong> ms</p>
     </div>
   </div>
 
   <h3 style="margin-top:.75rem">Config (holding registers)</h3>
   <div class="row">
     <label>Device address</label>
-    <input type="number" id="wind-cfg-addr" min="1" max="247" class="short">
-    <button class="btn-sm" onclick="postWindConfigWrite('device_addr')">Write</button>
-  </div>
-  <div class="row">
-    <label>Direction offset (°)</label>
-    <input type="number" id="wind-cfg-offset" step="0.1" class="short">
-    <button class="btn-sm" onclick="postWindConfigWrite('dir_offset')">Write</button>
+    <input type="number" id="wspd-cfg-addr" min="1" max="247" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('speed', 'device_addr')">Write</button>
   </div>
   <div class="row">
     <label>Measurement window (ms)</label>
-    <input type="number" id="wind-cfg-meas" class="short">
-    <button class="btn-sm" onclick="postWindConfigWrite('measurement_window')">Write</button>
+    <input type="number" id="wspd-cfg-meas" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('speed', 'measurement_window')">Write</button>
   </div>
   <div class="row">
     <label>Averaging window (s)</label>
-    <input type="number" id="wind-cfg-avg" class="short">
-    <button class="btn-sm" onclick="postWindConfigWrite('averaging_window')">Write</button>
+    <input type="number" id="wspd-cfg-avg" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('speed', 'averaging_window')">Write</button>
   </div>
-  <button onclick="postWindConfigRead()">Refresh config from device</button>
-  <p id="wind-config-status" class="hint"></p>
+  <button onclick="postWindConfigRead('speed')">Refresh config from device</button>
+  <p id="wspd-config-status" class="hint"></p>
+</section>
+
+<!-- ── Wind Direction ──────────────────────────────────────────── -->
+<section class="tab-panel" id="tab-winddir">
+  <h2>Wind Direction</h2>
+  <p class="hint">Separate physical unit from Wind Speed — slave address 31 (or 36 jumpered).</p>
+
+  <table class="reg-tbl">
+    <thead><tr><th>Register</th><th>Addr</th><th>Field</th><th>Scale</th></tr></thead>
+    <tbody>
+      <tr><td>Input (FC04)</td><td>0x0000</td><td>dir_instant</td><td>raw &divide;10 &deg;</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0001</td><td>dir_avg</td><td>raw &divide;10 &deg;</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0000</td><td>device_addr</td><td>unscaled, 1-247</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0001</td><td>dir_offset</td><td>raw &divide;10 &deg;</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0002</td><td>averaging_window</td><td>unscaled s</td></tr>
+    </tbody>
+  </table>
+
+  <div class="row">
+    <label>Slave address</label>
+    <input type="number" id="wdir-addr" min="1" max="247" value="31" class="short">
+    <label>Poll interval (ms)</label>
+    <input type="number" id="wdir-interval" min="100" value="1000" class="short">
+    <button id="btn-wdir-start" onclick="postWindStart('direction')">&#9654; Start</button>
+    <button id="btn-wdir-stop" onclick="postWindStop('direction')" disabled>&#9632; Stop</button>
+  </div>
+  <p class="hint">Only one wind sensor can poll at a time — starting this stops Wind Speed if it's running.</p>
+
+  <div class="grid4">
+    <div class="card">
+      <h3>Direction</h3>
+      <p>Instant: <strong id="wdir-instant">—</strong> &deg;</p>
+      <p>Average: <strong id="wdir-avg">—</strong> &deg;</p>
+    </div>
+    <div class="card">
+      <h3>Raw</h3>
+      <p>Age: <strong id="wdir-age">—</strong> ms</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:.75rem">Config (holding registers)</h3>
+  <div class="row">
+    <label>Device address</label>
+    <input type="number" id="wdir-cfg-addr" min="1" max="247" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('direction', 'device_addr')">Write</button>
+  </div>
+  <div class="row">
+    <label>Direction offset (&deg;)</label>
+    <input type="number" id="wdir-cfg-offset" step="0.1" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('direction', 'dir_offset')">Write</button>
+  </div>
+  <div class="row">
+    <label>Averaging window (s)</label>
+    <input type="number" id="wdir-cfg-avg" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('direction', 'averaging_window')">Write</button>
+  </div>
+  <button onclick="postWindConfigRead('direction')">Refresh config from device</button>
+  <p id="wdir-config-status" class="hint"></p>
 </section>
 
 <!-- ── Register Explorer ───────────────────────────────────────── -->
-<section>
+<section class="tab-panel" id="tab-explorer">
   <h2>Register Explorer</h2>
   <p class="hint">Generic single-shot FC03/04/06/16 tool — survives DUT register map changes without a firmware rebuild here.</p>
   <div class="row">
@@ -157,7 +223,7 @@
 </section>
 
 <!-- ── System Settings ──────────────────────────────────────────── -->
-<section>
+<section class="tab-panel" id="tab-settings">
   <h2>System Settings</h2>
 
   <h3>WiFi</h3>
@@ -202,7 +268,7 @@
   <button onclick="postModbusSettings()">Apply</button>
 </section>
 
-<!-- ── Modbus log ───────────────────────────────────────────────── -->
+<!-- ── Modbus log (always visible, pinned bottom) ─────────────────── -->
 <section>
   <h2>Modbus Log
     <button class="btn-sm" onclick="postLogClear()" style="float:right">Clear</button>

@@ -224,6 +224,18 @@ Modbus exception example:
 best-effort prose and may change wording between firmware versions —
 **clients must branch on `status`, never on `detail`/`hint` text.**
 
+### 4.4 Implementation note — reply-wait timeout must scale with the request
+
+The existing `/explorer/query` handler (`web_server_task.cpp`) waits on its
+reply queue with a hardcoded `EXPLORER_REPLY_TIMEOUT_MS = 2000` — safe today
+only because that endpoint can't override timeout/retries. `/api/v1/modbus`
+allows `timeout_ms` up to 5000 and `retries` up to 5 (§4.1) — worst case
+~30s of legitimate in-progress work. The handler for this endpoint **must**
+compute its own queue-wait budget as `timeout_ms × (retries + 1) + margin`
+per request, not reuse a fixed constant, or a caller using the high end of
+its own advertised range gets a spurious `status: "no_reply"` (§7) instead
+of a real result.
+
 ---
 
 ## 5. Supporting endpoints
@@ -285,6 +297,16 @@ Request:
 - `"wait": false` — returns `202` immediately with `{"ok":true,"state":"scanning"}`;
   poll `GET /api/v1/scan` for progress and results.
 
+**Implementation note:** `wait: true` must be implemented as a yielding
+poll loop (`bus_scan_get_status()` checked against a short `delay()` /
+`vTaskDelay()` between checks), not a single monolithic blocking wait.
+Holding an `AsyncWebServer` callback for up to ~100s is a different risk
+class than the ~2s blocks already proven safe in this codebase (a
+long solid block can starve other requests and the WebSocket broadcast for
+the whole duration). This project already proved the yielding-loop pattern
+works — the pre-cleanup `main.cpp` bring-up smoke test used exactly this
+shape to wait out a real scan (see git history / `memory/gotcha-log.md`).
+
 Completed-scan result (returned by both styles):
 
 ```json
@@ -320,6 +342,38 @@ TX/RX frames from the traffic log, newest last:
 
 Useful to a client for post-hoc debugging ("show me what actually went
 over the wire while the wind poller was running").
+
+### 5.5 `GET /api/v1/wind` — cached wind reading
+
+Added during spec review (§10) — not in the original draft. Without this,
+a machine client wanting wind data would have to re-issue `POST
+/api/v1/modbus` reads directly against the bus, bypassing
+`wind_poll_task`'s cache (doubling real bus traffic against the same
+registers whenever the Wind Test panel is also open) and re-deriving the
+DUT's ×10 decode client-side even though `wind_poll.cpp` already does it.
+
+```json
+{
+  "ok": true,
+  "has_data": true,
+  "target": 31,
+  "dir_instant_deg": 183.4,
+  "speed_instant_ms": 4.2,
+  "dir_avg_deg": 181.0,
+  "speed_avg_ms": 3.9,
+  "raw_pulses": 27,
+  "age_ms": 420
+}
+```
+
+Same fields as the existing WebSocket `type:"wind"` payload
+(`web_core_build_wind_json`, already implemented and tested) — this is a
+new route over existing logic, not new decode logic. `has_data: false`
+when no target is active or nothing has been read yet, matching the
+WebSocket shape's existing convention. `target` is the currently-active
+`wind_test_addr`; absent (or `has_data: false`) when the Wind Test panel
+isn't active, since `wind_poll_task` is suspended in that state (§5's own
+Wind Test description in `completeRealisationPlan.md`).
 
 ---
 
@@ -423,19 +477,71 @@ here but not specified.
 
 ## 10. Open questions / deferred
 
-- [ ] **Batching** — accept an array of transactions in one POST and return
-      an array of results? Deferred: one-transaction-per-call keeps error
-      handling trivial for LLM clients; revisit if round-trip latency ever
-      dominates a workflow.
-- [ ] **Implementation placement** — new `api_server` library vs. extending
-      `web_server_task` + `web_core` (where `/explorer/query` lives).
-      Leaning to the latter: same AsyncWebServer instance, JSON builders in
-      `web_core` so they stay host-testable.
-- [ ] **`/explorer/query` convergence** — once `/api/v1/modbus` exists, the
-      web UI's Register Explorer could call it instead and `/explorer/query`
-      be retired. Decide during implementation.
-- [ ] **FC05/FC01 (coils)** — the DUT has no coils; add only if a future
-      DUT needs them.
-- [ ] **Streaming poll endpoint** — a long-poll or SSE variant of the Wind
-      Test poller for machine clients. Deferred; `POST /api/v1/modbus` in a
-      client-side loop covers v1 needs.
+Elaborated 2026-07-02, cross-referenced against the actual `mb_master` /
+`web_server_task` code rather than just the API shape on paper.
+
+- [x] **Batching** — accept an array of transactions in one POST and return
+      an array of results? **Decision: stays deferred.** The bus is
+      serialised through one queue regardless (`modbus_master_task` is the
+      sole UART owner) — batching would save HTTP round-trips, not bus
+      time, and a local bench network's HTTP overhead is small next to a
+      ~20–40ms Modbus transaction. The real cost would be partial-failure
+      semantics (transaction 3 of 5 times out — abort the rest, or
+      continue?), which cuts against design principle #1's "no session
+      state" goal. Revisit only if a genuine multi-device fleet workflow
+      appears — same reasoning as the multi-device Wind Test dashboard
+      already deferred to v2 (`scratchbook.md` §9).
+- [x] **Implementation placement** — new `api_server` library vs. extending
+      `web_server_task` + `web_core`. **Decision: extend `web_server_task` +
+      `web_core`.** `web_core` already exists to hold host-testable
+      JSON-building logic separate from the Arduino-only orchestration
+      (`web_core_build_scan_json`/`_wind_json`/`_status_json`, 10 native
+      tests) — the new `/api/v1/*` response shapes are the same kind of
+      thing, not a new concern. A second library would mean either a
+      redundant second `AsyncWebServer` instance or cross-library calls
+      back into `web_core` anyway. New `web_core` builders (e.g.
+      `web_core_build_api_modbus_json()`, `_api_error_json()`,
+      `_api_spec_json()`) plus new routes in `web_server_task.cpp` is the
+      whole implementation.
+- [x] **`/explorer/query` convergence** — once `/api/v1/modbus` exists,
+      should the web UI's Register Explorer keep its own route or call the
+      new one directly? **Decision: share the core, keep both routes.**
+      Both endpoints call the same underlying transact-and-build-JSON
+      helper in `web_core`; `/explorer/query` stays as a thin, UI-shaped
+      wrapper around it. No behaviour change to the web UI (already
+      hardware-verified, `progress.md` §3), no route retirement, logic
+      duplication eliminated anyway. The existing `explorer_transact()`
+      helper (`web_server_task.cpp`) can't be reused unmodified for this —
+      see §4.4's reply-timeout note; it needs to become parameterised on
+      timeout/retries rather than a fixed constant.
+- [x] **FC05/FC01 (coils)** — the DUT has no coils; add only if a future
+      DUT needs them. **Decision: closed, no action.** Consistent with this
+      project's "don't design for hypothetical future requirements"
+      principle — nothing currently in scope needs coils.
+- [x] **Streaming poll endpoint** — a long-poll or SSE variant of the Wind
+      Test poller for machine clients. **Decision: still deferred.**
+      SSE/long-poll would add real complexity to `AsyncWebServer` for a
+      bench tool that doesn't need it. What was missing instead of
+      streaming was a way to read the *already-polled* value without
+      re-transacting the bus — added as §5.5 `GET /api/v1/wind`.
+
+### 10.1 Implementation notes added during this review
+
+Not gaps in the original design so much as things that only became visible
+by cross-checking against the actual code:
+
+- **§4.4** — the reply-wait timeout must be computed from the request's own
+  `timeout_ms`/`retries`, not reused from `/explorer/query`'s fixed 2000ms
+  constant.
+- **§5.3** — `wait: true` must be a yielding poll loop, not a single
+  blocking wait, given the ~100s worst case.
+- **§5.5** — new `GET /api/v1/wind` endpoint, so machine clients get the
+  cheap/cached path to wind data instead of only the bus-re-querying one.
+
+### 10.2 Sequencing
+
+Per project discussion: this API is implemented **before** Phase 3
+(`design/whatsNext.md`) — it becomes one of the tools used to actually run
+Phase 3's integration tests (INT-01…09) against the sensor emulator and,
+later, the real DUT, rather than being built after that bench work is
+already done by other means.

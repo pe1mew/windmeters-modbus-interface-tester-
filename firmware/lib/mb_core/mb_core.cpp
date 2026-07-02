@@ -11,6 +11,7 @@ static uint8_t  s_last_tx[MB_MAX_FRAME_LEN];
 static uint16_t s_last_tx_len = 0;
 static uint8_t  s_last_rx[MB_MAX_FRAME_LEN];
 static uint16_t s_last_rx_len = 0;
+static uint8_t  s_last_attempts = 0;
 
 void mb_init(const mb_transport_t *transport, uint16_t timeout_ms, uint8_t retries)
 {
@@ -35,6 +36,11 @@ uint16_t mb_get_last_rx(uint8_t *buf, uint16_t max_len)
     uint16_t n = (s_last_rx_len < max_len) ? s_last_rx_len : max_len;
     memcpy(buf, s_last_rx, n);
     return n;
+}
+
+uint8_t mb_get_last_attempts(void)
+{
+    return s_last_attempts;
 }
 
 static mb_status_t frame_status_to_mb_status(mb_frame_status_t fs)
@@ -77,10 +83,12 @@ static mb_status_t do_transaction(const uint8_t *req, uint16_t req_len,
             uint16_t rx_copy_len = (n < MB_MAX_FRAME_LEN) ? n : MB_MAX_FRAME_LEN;
             memcpy(s_last_rx, resp, rx_copy_len);
             s_last_rx_len = rx_copy_len;
+            s_last_attempts = (uint8_t)(attempt + 1);
             return MB_OK;
         }
         /* n == 0: no response this attempt — loop retries if any left. */
     }
+    s_last_attempts = (uint8_t)(s_retries + 1);
     return MB_ERR_TIMEOUT;
 }
 
@@ -93,6 +101,7 @@ static mb_status_t read_registers(uint8_t addr, uint8_t fc, uint16_t start,
      * uses tx_len > 0 to decide whether a transaction touched the wire. */
     s_last_tx_len = 0;
     s_last_rx_len = 0;
+    s_last_attempts = 0;
 
     if (addr == 0 || out == 0)                    return MB_ERR_PARAM;
     if (count == 0 || count > MB_MAX_READ_REGISTERS) return MB_ERR_PARAM;
@@ -129,6 +138,7 @@ mb_status_t mb_write_single_register(uint8_t addr, uint16_t reg, uint16_t value)
 {
     s_last_tx_len = 0;
     s_last_rx_len = 0;
+    s_last_attempts = 0;
     if (addr == 0) return MB_ERR_PARAM;
 
     uint8_t req[MB_MAX_FRAME_LEN];
@@ -154,6 +164,7 @@ mb_status_t mb_write_multiple_registers(uint8_t addr, uint16_t start, uint8_t co
 {
     s_last_tx_len = 0;
     s_last_rx_len = 0;
+    s_last_attempts = 0;
     if (addr == 0 || values == 0)                    return MB_ERR_PARAM;
     if (count == 0 || count > MB_MAX_WRITE_REGISTERS) return MB_ERR_PARAM;
 

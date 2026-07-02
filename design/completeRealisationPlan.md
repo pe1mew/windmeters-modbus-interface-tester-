@@ -434,23 +434,33 @@ TASK-MB, TASK-SCAN, TASK-WIND all running
 ## 4. Part C — Integration Test
 
 Requires the AtomS3 + Atomic RS485 Base bench setup from
-`realisationPlan.md` §4. Two bench targets are used, for the reason given
-there: the real DUT (`windmeters-modbus-interface`) has no register
-firmware yet, so `greenhouse-Controller-Modbus-sensor-emulator` stands in
-as a real, working Modbus slave wherever the test doesn't specifically need
-the DUT's own register map.
+`realisationPlan.md` §4. The real DUT (`windmeters-modbus-interface`) has
+no register firmware yet, so a real FG6485A sensor stands in as a working
+Modbus slave wherever a test doesn't specifically need the DUT's own
+register map (originally planned as `greenhouse-Controller-Modbus-sensor-emulator`
+— superseded by real hardware, see the scope decision below).
+
+**Scope decision (2026-07-02):** S200 (address 44) is out of scope —
+will never be connected, real or emulated. INT-03/04 below cover FG6485A
+(address 1) only; this isn't a gap waiting on hardware, it's the full
+intended scope. Address 1 also ended up being a genuine physical FG6485A
+sensor rather than the sensor-emulator originally planned — strictly
+stronger evidence for the FC03/Modicon mechanics INT-04 validates, since
+it exercises real commercial firmware rather than a software stand-in.
 
 | Test ID | Scenario | Bench target | Validation |
 |---------|----------|---------------|------------|
 | INT-01 | Cold boot, no NVS config | — | Device starts in AP mode; `index.html` loads with every section from TASK-WEB's table present |
 | INT-02 | Configure WiFi via AP-mode web UI | — | Device reconnects in STA mode; `windmeter-tester.local` resolves |
-| INT-03 | Full bus scan | Sensor emulator (addresses 1, 44) | Bus Scanner reports both addresses; progress visible throughout |
-| INT-04 | Generic register read via Register Explorer | Sensor emulator | FC03 read of FG6485A registers and FC04 read of S200 registers both return values matching the emulator's own web UI — validates FC03/04 mechanics and the Modicon-conversion path, independent of the DUT's register map |
-| INT-05 | Wind Test decode accuracy | Real DUT | **Blocked** (§6) — the emulator's S200 registers use the wrong scale/layout (×1000, 7 registers) to validate the DUT's Wind Test decode (×10, 5 registers); this test can only be meaningful against the real DUT or a purpose-built mock of its exact register map |
-| INT-06 | Register Explorer write + read-back | Sensor emulator (FG6485A alarm config, `0x000C`–`0x0013`) as a mechanics-only stand-in | FC16 write followed by FC03 read-back returns the written values — validates the write path generically; DUT-specific holding-register write-back (INT for the Wind Test config form) is blocked the same way as INT-05 |
+| INT-03 | Full bus scan | FG6485A (address 1) | Bus Scanner reports the address; progress visible throughout |
+| INT-04 | Generic register read via Register Explorer | FG6485A | FC03 read of FG6485A registers returns values matching an independent read — validates FC03 mechanics and the Modicon-conversion path, independent of the DUT's register map |
+| INT-05 | Wind Test decode accuracy | Real DUT | **Blocked** (§6) — the FG6485A's registers use the wrong scale/layout to validate the DUT's Wind Test decode (×10, 5 registers); this test can only be meaningful against the real DUT or a purpose-built mock of its exact register map |
+| INT-06 | Register Explorer write + read-back | FG6485A (alarm config, `0x000C`–`0x0013`) as a mechanics-only stand-in | FC16 write followed by FC03 read-back returns the written values — validates the write path generically; DUT-specific holding-register write-back (INT for the Wind Test config form) is blocked the same way as INT-05 |
 | INT-07 | Modbus Log ordering | Either | TX and RX frames from a scan appear correctly interleaved and timestamped |
 | INT-08 | LED state transitions | Either | Idle → scanning → valid-frame/error states are visually correct and return to idle when the scan ends |
 | INT-09 | Settings survive power-cycle | — | WiFi credentials, last scan range, and last Wind Test address are all retained after a power-cycle |
+
+Results for INT-03/04/06/07/09: `design/whatsNext.md` §3.2.
 
 ---
 

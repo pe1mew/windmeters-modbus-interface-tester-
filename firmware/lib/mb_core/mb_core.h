@@ -90,3 +90,14 @@ uint16_t mb_get_last_tx(uint8_t *buf, uint16_t max_len);
  *         received — a timeout, or nothing was sent in the first place).
  */
 uint16_t mb_get_last_rx(uint8_t *buf, uint16_t max_len);
+
+/**
+ * @brief Attempts the most recent mb_* call took (1 + retries actually consumed).
+ *
+ * Same single-scratch-value caveat as mb_last_exception_code() /
+ * mb_get_last_tx() / mb_get_last_rx() — valid only until the next mb_* call.
+ * 0 if the call never reached the transport (rejected by parameter
+ * validation) — callers that need this value durably (e.g. across a
+ * FreeRTOS queue hop) must copy it out immediately, same as the tx/rx bytes.
+ */
+uint8_t mb_get_last_attempts(void);

@@ -40,6 +40,48 @@ fault at first glance, wasn't one). Flushing
 (`while (Serial2.available()) Serial2.read();`) after `begin()` and before
 sending fixed it. See `firmware/src/main.cpp`.
 
+**The first real Modbus transaction after a fresh boot can silently fail —
+reproduced twice, across two separate reboots.** With a real FG6485A wired
+up at address 1, a `POST /api/v1/scan` (or `/scan/start`) run as the very
+first bus activity after a reboot consistently comes back with `found:[]`
+— the device that's demonstrably there and responsive doesn't answer. Every
+scan since (same session, same wiring, no changes) finds it reliably,
+`round_trip_ms` in the same ~379–381ms range each time. Not yet
+root-caused; plausibly related to the UART-glitch-after-`begin()` class of
+issue above (something not fully settled on the bus immediately after
+`Serial2` initialises), but that's a hypothesis, not confirmed — the
+existing RX-flush only runs during the removed bring-up loopback test, not
+on every boot, so if this *is* the same root cause, the fix would need to
+move into `mb_transport_arduino`'s init path instead. If a scan comes back
+suspiciously empty right after a power-cycle/reflash, retry once before
+assuming the bus or the device is actually down.
+
+## Firmware — NVS / `cfg` key names
+
+**A `cfg_keys.h` key over Preferences' 15-character limit doesn't error —
+it silently never persists, forever, and mock-backed native tests can't
+catch it.** `CFG_KEY_SCAN_RANGE_START` was `"scan_range_start"` (16 chars)
+and `CFG_KEY_WIND_POLL_INTERVAL` was `"wind_poll_interval_ms"` (21 chars) —
+both well past ESP-IDF NVS's `NVS_KEY_NAME_MAX_SIZE - 1` = 15. Found via
+INT-09 (`whatsNext.md`): set a distinctive scan range, rebooted the real
+device, and the range silently reverted to the default instead of the
+value just set. `cfg_backend_preferences.cpp`'s `prefs_set_u8()` (and
+every sibling `prefs_set_*`) calls `Preferences::put*()` and discards the
+return value — `put*()` itself returns 0/fails silently on an oversized
+key rather than throwing or logging, so every subsequent `get*()` just
+falls back to the default as if nothing had ever been written. Every
+native test for these two keys (`test_cfg_round_trip_u32`,
+`test_cfg_round_trip_u8`, `test_cfg_persists_across_reinit`) passed the
+whole time — `mock_cfg_backend` is an in-memory map with no key-length
+constraint, so it structurally cannot catch this class of bug. Fixed by
+shortening both keys (`scan_start`/`scan_end`/`wind_poll_ms`) and adding
+`test_all_keys_fit_the_15_char_preferences_limit` — a pure `strlen()`
+check over every `CFG_KEY_*` constant, no backend needed, so this can
+never silently recur. If a setting seems to "not stick" across a reboot
+specifically (not a general read/write failure — writes and immediate
+reads within the same boot session can still coincidentally look fine
+depending on caching), check the key length first.
+
 ## Toolchain — HTTP verification from PowerShell
 
 **`Invoke-WebRequest` without `-UseBasicParsing` can fail with "PowerShell

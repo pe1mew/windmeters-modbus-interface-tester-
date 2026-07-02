@@ -1,23 +1,45 @@
 #include "wind_poll.h"
+#include <string.h>
 
-void wind_poll_decode(const uint16_t raw_registers[5], wind_reading_t *out)
+void wind_poll_decode_speed(const uint16_t raw_registers[3], wind_reading_t *out)
 {
-    out->dir_instant_deg  = (float)raw_registers[0] / 10.0f;
-    out->speed_instant_ms = (float)raw_registers[1] / 10.0f;
-    out->dir_avg_deg      = (float)raw_registers[2] / 10.0f;
-    out->speed_avg_ms     = (float)raw_registers[3] / 10.0f;
-    out->raw_pulses       = raw_registers[4];
+    memset(out, 0, sizeof(*out));
+    out->speed_instant_ms = (float)raw_registers[0] / 10.0f;
+    out->speed_avg_ms     = (float)raw_registers[1] / 10.0f;
+    out->raw_pulses       = raw_registers[2];
 }
 
-uint16_t wind_config_field_register(wind_config_field_t field)
+void wind_poll_decode_direction(const uint16_t raw_registers[2], wind_reading_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->dir_instant_deg = (float)raw_registers[0] / 10.0f;
+    out->dir_avg_deg     = (float)raw_registers[1] / 10.0f;
+}
+
+uint8_t wind_sensor_input_register_count(wind_sensor_type_t type)
+{
+    return (type == WIND_SENSOR_SPEED) ? 3u : 2u;
+}
+
+uint16_t wind_config_field_register(wind_sensor_type_t type, wind_config_field_t field)
 {
     switch (field) {
-        case WIND_CFG_DEVICE_ADDR:         return 0x0000;
-        case WIND_CFG_DIR_OFFSET:          return 0x0001;
-        case WIND_CFG_MEASUREMENT_WINDOW:  return 0x0002;
-        case WIND_CFG_AVERAGING_WINDOW:    return 0x0003;
-        default:                           return 0xFFFF;
+        case WIND_CFG_DEVICE_ADDR:
+            return 0x0000;
+        case WIND_CFG_DIR_OFFSET:
+            return (type == WIND_SENSOR_DIRECTION) ? 0x0001 : 0xFFFF;
+        case WIND_CFG_MEASUREMENT_WINDOW:
+            return (type == WIND_SENSOR_SPEED) ? 0x0001 : 0xFFFF;
+        case WIND_CFG_AVERAGING_WINDOW:
+            return 0x0002;
+        default:
+            return 0xFFFF;
     }
+}
+
+uint8_t wind_sensor_holding_register_count(wind_sensor_type_t /*type*/)
+{
+    return 3u; /* both types: device_addr, {dir_offset|measurement_window}, averaging_window */
 }
 
 uint16_t wind_config_field_encode(wind_config_field_t field, float value)

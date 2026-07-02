@@ -31,6 +31,19 @@ typedef struct {
     uint8_t range_end;
     uint8_t found[BUS_SCAN_MAX_FOUND];
     uint8_t found_count;
+
+    /**
+     * Parallel arrays, indexed alongside found[] — added for
+     * design/api.md §5.3's per-device functions_ok/round_trip_ms. Kept
+     * separate from found[] itself (rather than replacing it with a struct
+     * array) so the existing WebSocket type:"scan" payload
+     * (web_core_build_scan_json) is untouched.
+     */
+    uint8_t  found_fc[BUS_SCAN_MAX_FOUND];            /**< Function code that got found[i]'s reply — always 0x04 today (bus_scan probes FC04 only); a real field rather than a hardcoded assumption, for when/if multi-FC probing is added. */
+    uint32_t found_round_trip_ms[BUS_SCAN_MAX_FOUND]; /**< Wall-clock time for found[i]'s probe. */
+
+    uint32_t start_ms;    /**< Set by bus_scan_start(). */
+    uint32_t duration_ms; /**< Set once state becomes SCAN_COMPLETE (design/api.md §5.3). 0 while running/idle/cancelled. */
 } bus_scan_status_t;
 
 /**
@@ -42,8 +55,8 @@ typedef struct {
  */
 bool bus_scan_did_respond(mb_status_t status);
 
-/** @brief Begin a sweep from @p range_start to @p range_end (inclusive). */
-void bus_scan_start(uint8_t range_start, uint8_t range_end);
+/** @brief Begin a sweep from @p range_start to @p range_end (inclusive). @p timestamp_ms feeds duration_ms once complete. */
+void bus_scan_start(uint8_t range_start, uint8_t range_end, uint32_t timestamp_ms);
 
 /** @brief Stop early. No-op if not currently running. */
 void bus_scan_cancel(void);
@@ -56,7 +69,14 @@ bool bus_scan_is_active(void);
  * No-op if the scan isn't running (already cancelled/complete) — guards
  * against a stray late result from a probe that was in flight when the
  * scan was cancelled.
+ *
+ * @param fc             Function code that was probed (only stored when
+ *                        @p responded is true).
+ * @param round_trip_ms  Wall-clock time the probe took (only stored when
+ *                        @p responded is true).
+ * @param timestamp_ms   Used to compute duration_ms if this probe completes
+ *                        the sweep; ignored otherwise.
  */
-void bus_scan_record_probe_result(bool responded);
+void bus_scan_record_probe_result(bool responded, uint8_t fc, uint32_t round_trip_ms, uint32_t timestamp_ms);
 
 bus_scan_status_t bus_scan_get_status(void);

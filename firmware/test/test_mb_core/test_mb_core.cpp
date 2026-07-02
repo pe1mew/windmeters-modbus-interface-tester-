@@ -407,6 +407,61 @@ void test_get_last_tx_rx_empty_after_param_rejection(void)
     TEST_ASSERT_EQUAL_UINT16(0, mb_get_last_rx(rx, sizeof(rx)));
 }
 
+void test_attempts_is_one_on_first_try_success(void)
+{
+    const uint16_t vals[2] = {0x00AA, 0x00BB};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 1, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+
+    uint16_t out[2] = {0};
+    mb_read_holding_registers(1, 0, 2, out);
+    TEST_ASSERT_EQUAL_UINT8(1, mb_get_last_attempts());
+}
+
+void test_attempts_reflects_one_retry_consumed(void)
+{
+    mb_init(&mock_transport, 200, 1); /* 1 retry: up to two attempts */
+    mock_transport_queue_timeout();
+
+    const uint16_t vals[2] = {0x00AA, 0x00BB};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 1, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+
+    uint16_t out[2] = {0};
+    mb_read_holding_registers(1, 0, 2, out);
+    TEST_ASSERT_EQUAL_UINT8(2, mb_get_last_attempts());
+}
+
+void test_attempts_after_retries_exhausted_equals_retries_plus_one(void)
+{
+    mb_init(&mock_transport, 200, 1);
+    mock_transport_queue_timeout();
+    mock_transport_queue_timeout();
+
+    uint16_t out[2] = {0};
+    mb_read_holding_registers(1, 0, 2, out);
+    TEST_ASSERT_EQUAL_UINT8(2, mb_get_last_attempts());
+}
+
+void test_attempts_zero_after_param_rejection(void)
+{
+    /* A prior successful call leaves a nonzero attempts count sitting there. */
+    const uint16_t vals[2] = {0x1111, 0x2222};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 1, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+    uint16_t out[2] = {0};
+    mb_read_holding_registers(1, 0, 2, out);
+    TEST_ASSERT_EQUAL_UINT8(1, mb_get_last_attempts());
+
+    /* PARAM-rejected call (addr=0) must not report the previous call's count. */
+    mb_status_t status = mb_read_holding_registers(0, 0, 2, out);
+    TEST_ASSERT_EQUAL_INT(MB_ERR_PARAM, status);
+    TEST_ASSERT_EQUAL_UINT8(0, mb_get_last_attempts());
+}
+
 /* ---------------------------------------------------------------------------
  * Entry point
  * --------------------------------------------------------------------------- */
@@ -434,6 +489,10 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_get_last_tx_rx_after_successful_call);
     RUN_TEST(test_get_last_rx_is_empty_after_timeout);
     RUN_TEST(test_get_last_tx_rx_empty_after_param_rejection);
+    RUN_TEST(test_attempts_is_one_on_first_try_success);
+    RUN_TEST(test_attempts_reflects_one_retry_consumed);
+    RUN_TEST(test_attempts_after_retries_exhausted_equals_retries_plus_one);
+    RUN_TEST(test_attempts_zero_after_param_rejection);
 
     return UNITY_END();
 }

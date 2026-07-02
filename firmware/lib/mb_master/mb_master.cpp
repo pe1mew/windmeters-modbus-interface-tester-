@@ -91,6 +91,17 @@ mb_result_t mb_master_process(const mb_request_t *req, uint32_t timestamp_ms)
     log_frame(true, tx, tx_len, summary, timestamp_ms);
     log_frame(false, rx, rx_len, summary, timestamp_ms);
 
+    /* Copied out now, while still fresh, rather than leaving callers to call
+     * mb_get_last_tx/_rx/_attempts() themselves later — those are
+     * single-scratch-value accessors that the *next* queued transaction can
+     * silently overwrite before a caller on the far side of a FreeRTOS queue
+     * hop gets scheduled (design/api.md §4.4). */
+    result.raw_tx_len = tx_len;
+    memcpy(result.raw_tx, tx, tx_len);
+    result.raw_rx_len = rx_len;
+    memcpy(result.raw_rx, rx, rx_len);
+    result.attempts = dispatched ? mb_get_last_attempts() : 0;
+
     switch (result.status) {
         case MB_OK:
             led_pulse_valid();

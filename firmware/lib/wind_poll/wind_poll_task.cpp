@@ -9,11 +9,12 @@
 #define REPLY_TIMEOUT_MS 2000u
 #define POLL_CHECK_INTERVAL_MS 100u
 
-static bool           s_active        = false;
-static uint8_t        s_target_addr   = 0;
-static wind_reading_t s_latest;
-static bool           s_has_data      = false;
-static uint32_t       s_last_poll_ms  = 0;
+static bool               s_active        = false;
+static uint8_t             s_target_addr   = 0;
+static wind_sensor_type_t s_active_type   = WIND_SENSOR_SPEED;
+static wind_reading_t     s_latest;
+static bool                s_has_data      = false;
+static uint32_t            s_last_poll_ms  = 0;
 
 /** @brief Submit a read (FC03/FC04) through modbus_master_task's queue and wait for the reply. */
 static bool do_read_registers(uint8_t addr, uint8_t fc, uint16_t start, uint8_t count, uint16_t *out)
@@ -68,9 +69,14 @@ static void wind_poll_task_fn(void * /*pvParameters*/)
         if (s_active) {
             uint32_t interval = cfg_get_u32(CFG_KEY_WIND_POLL_INTERVAL, CFG_DEFAULT_WIND_POLL_INTERVAL);
             if (!s_has_data || wind_poll_interval_elapsed(millis(), s_last_poll_ms, interval)) {
-                uint16_t raw[5];
-                if (do_read_registers(s_target_addr, 0x04, 0x0000, 5, raw)) {
-                    wind_poll_decode(raw, &s_latest);
+                uint16_t raw[3]; /* 3 is the larger of the two input-register counts (speed) */
+                uint8_t count = wind_sensor_input_register_count(s_active_type);
+                if (do_read_registers(s_target_addr, 0x04, 0x0000, count, raw)) {
+                    if (s_active_type == WIND_SENSOR_SPEED) {
+                        wind_poll_decode_speed(raw, &s_latest);
+                    } else {
+                        wind_poll_decode_direction(raw, &s_latest);
+                    }
                     s_has_data     = true;
                     s_last_poll_ms = millis();
                 }
@@ -88,15 +94,21 @@ void wind_poll_task_start(void)
     xTaskCreatePinnedToCore(wind_poll_task_fn, "wind_poll", 4096, NULL, 3, NULL, APP_CPU_NUM);
 }
 
-void wind_poll_set_active(uint8_t addr, bool active)
+void wind_poll_set_active(uint8_t addr, wind_sensor_type_t type, bool active)
 {
     s_target_addr = addr;
+    s_active_type = type;
     s_active      = active;
 }
 
 bool wind_poll_is_active(void)
 {
     return s_active;
+}
+
+wind_sensor_type_t wind_poll_get_active_type(void)
+{
+    return s_active_type;
 }
 
 wind_reading_t wind_poll_get_latest(void)
@@ -117,22 +129,30 @@ uint32_t wind_poll_age_ms(void)
     return millis() - s_last_poll_ms;
 }
 
-bool wind_poll_read_config(uint8_t addr, wind_config_t *out)
+bool wind_poll_read_config(uint8_t addr, wind_sensor_type_t type, wind_config_t *out)
 {
-    uint16_t raw[4];
-    if (!do_read_registers(addr, 0x03, 0x0000, 4, raw)) {
+    uint16_t raw[3]; /* both types: device_addr, {dir_offset|measurement_window}, averaging_window */
+    uint8_t count = wind_sensor_holding_register_count(type);
+    if (!do_read_registers(addr, 0x03, 0x0000, count, raw)) {
         return false;
     }
-    out->device_addr            = (uint8_t)wind_config_field_decode(WIND_CFG_DEVICE_ADDR, raw[0]);
-    out->dir_offset_deg         = wind_config_field_decode(WIND_CFG_DIR_OFFSET, raw[1]);
-    out->measurement_window_ms  = (uint16_t)wind_config_field_decode(WIND_CFG_MEASUREMENT_WINDOW, raw[2]);
-    out->averaging_window_s     = (uint16_t)wind_config_field_decode(WIND_CFG_AVERAGING_WINDOW, raw[3]);
+    memset(out, 0, sizeof(*out));
+    out->device_addr = (uint8_t)wind_config_field_decode(WIND_CFG_DEVICE_ADDR, raw[0]);
+    if (type == WIND_SENSOR_DIRECTION) {
+        out->dir_offset_deg = wind_config_field_decode(WIND_CFG_DIR_OFFSET, raw[1]);
+    } else {
+        out->measurement_window_ms = (uint16_t)wind_config_field_decode(WIND_CFG_MEASUREMENT_WINDOW, raw[1]);
+    }
+    out->averaging_window_s = (uint16_t)wind_config_field_decode(WIND_CFG_AVERAGING_WINDOW, raw[2]);
     return true;
 }
 
-bool wind_poll_write_config_field(uint8_t addr, wind_config_field_t field, float value)
+bool wind_poll_write_config_field(uint8_t addr, wind_sensor_type_t type, wind_config_field_t field, float value)
 {
-    uint16_t reg       = wind_config_field_register(field);
+    uint16_t reg = wind_config_field_register(type, field);
+    if (reg == 0xFFFF) {
+        return false; /* field doesn't exist for this sensor type — never touch the wire */
+    }
     uint16_t raw_value = wind_config_field_encode(field, value);
     return do_write_single(addr, reg, raw_value);
 }

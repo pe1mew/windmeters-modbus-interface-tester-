@@ -201,12 +201,19 @@ up; a bus peer is required, see §4):
 
 ## 4. Bring-Up and Verification Sequence
 
+**Status (2026-07-02): steps 1–4 done**, against a real FG6485A sensor
+rather than the originally-planned emulator (one arrived on the bench
+instead) — stronger evidence than planned, since it's real commercial
+firmware rather than a software stand-in. S200 dropped from step 3's pass
+criteria entirely: out of scope, will never be connected. Full results:
+`design/whatsNext.md` §3.2 and `design/progress.md` §7.
+
 | Step | Action | Pass criteria |
 |------|--------|----------------|
 | 1 | UART loopback: jumper `G5`↔`G6` directly (bypassing the RS-485 base); write a known byte pattern | Bytes read back match exactly — confirms the UART pins and baud before any Modbus logic is in the loop |
 | 2 | Run MB-1's unit test suite on host (`pio test -e native`) | All CRC16 / frame-build / frame-parse tests pass — no hardware involved |
-| 3 | Connect the Atomic RS485 Base; run MB-1 against **`greenhouse-Controller-Modbus-sensor-emulator`** (an existing AtomLite unit) as the bus peer instead of the DUT | FC03 read of the FG6485A registers (address 1) and FC04 read of the S200 registers (address 44) both return values matching what the emulator's web UI shows — see `s200.h` / emulator docs for the exact register addresses |
-| 4 | Run MB-2's acceptance tests against the same emulator target | All §3 acceptance tests pass |
+| 3 | Connect the Atomic RS485 Base; run MB-1 against a real bus peer instead of the DUT | FC03 read of the FG6485A registers (address 1) returns values matching an independent read |
+| 4 | Run MB-2's acceptance tests against the same target | All §3 acceptance tests pass |
 | 5 | Repeat step 3/4 against the real `windmeters-modbus-interface` DUT | **Currently blocked** — see §6. Re-run once that firmware implements its register map |
 
 Step 3 is the one worth calling out: the DUT (`windmeters-modbus-interface`)

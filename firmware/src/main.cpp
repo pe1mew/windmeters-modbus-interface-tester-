@@ -33,8 +33,6 @@
 #include "wind_poll_task.h"
 #include "web_server_task.h"
 
-#define MB_LOG_CAPACITY 32
-
 void setup()
 {
     Serial.begin(115200);

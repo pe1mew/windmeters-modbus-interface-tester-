@@ -11,6 +11,14 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/**
+ * Single source of truth for the ring buffer's capacity — main.cpp's
+ * mblog_init() call and web_server_task.cpp's GET /api/v1/log cap (both
+ * Arduino-only, can't share a #define declared in main.cpp) both use this
+ * instead of each hardcoding their own copy of the number.
+ */
+#define MB_LOG_CAPACITY 50u
+
 typedef struct {
     uint32_t timestamp_ms;  /**< From the (eventually) NTP-synced clock. */
     bool     is_tx;         /**< true = we sent it, false = response received. */

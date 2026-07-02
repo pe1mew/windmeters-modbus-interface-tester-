@@ -18,6 +18,7 @@
 
 #include <stdint.h>
 #include "mb_core.h"
+#include "mb_frame.h" /* MB_MAX_FRAME_LEN */
 
 typedef struct {
     uint8_t  addr;
@@ -31,6 +32,21 @@ typedef struct {
     mb_status_t status;
     uint16_t    registers[125]; /**< Populated for FC03/FC04 when status == MB_OK. */
     uint8_t     exception_code; /**< Valid when status == MB_ERR_EXCEPTION. */
+
+    /**
+     * Raw wire frames + attempt count, copied out of mb_core's single-scratch-
+     * value accessors (mb_get_last_tx/_rx/_attempts) while they're still
+     * fresh, so this result stays correct after a FreeRTOS queue hop even if
+     * modbus_master_task has already started the next queued transaction by
+     * the time a caller reads it (design/api.md §4.4). raw_tx_len/raw_rx_len
+     * are 0 when nothing was sent/received (PARAM rejection, or a pure
+     * timeout for raw_rx) — same convention as the mb_core accessors.
+     */
+    uint8_t     raw_tx[MB_MAX_FRAME_LEN];
+    uint16_t    raw_tx_len;
+    uint8_t     raw_rx[MB_MAX_FRAME_LEN];
+    uint16_t    raw_rx_len;
+    uint8_t     attempts;
 } mb_result_t;
 
 typedef struct {

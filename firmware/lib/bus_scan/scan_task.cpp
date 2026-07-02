@@ -6,6 +6,7 @@
 #include <string.h>
 
 #define PROBE_REPLY_TIMEOUT_MS 2000u
+#define PROBE_FC 0x04
 
 typedef struct {
     bool    is_cancel;
@@ -24,11 +25,12 @@ static void probe_current_address(void)
     mb_task_request_t task_req;
     memset(&task_req, 0, sizeof(task_req));
     task_req.request.addr  = addr;
-    task_req.request.fc    = 0x04;
+    task_req.request.fc    = PROBE_FC;
     task_req.request.start = 0x0000;
     task_req.request.count = 1;
     task_req.reply_to      = reply_queue;
 
+    uint32_t start_ms = millis();
     xQueueSend(modbus_master_get_queue(), &task_req, portMAX_DELAY);
 
     mb_result_t result;
@@ -38,7 +40,8 @@ static void probe_current_address(void)
     }
     vQueueDelete(reply_queue);
 
-    bus_scan_record_probe_result(responded);
+    uint32_t now_ms = millis();
+    bus_scan_record_probe_result(responded, PROBE_FC, now_ms - start_ms, now_ms);
 }
 
 /** @brief Drain any command that arrived while a sweep is running, without blocking. */
@@ -60,7 +63,7 @@ static void scan_task_fn(void * /*pvParameters*/)
             }
 
             led_set_scanning();
-            bus_scan_start(cmd.range_start, cmd.range_end);
+            bus_scan_start(cmd.range_start, cmd.range_end, millis());
             while (bus_scan_is_active()) {
                 probe_current_address();
                 check_for_cancel();

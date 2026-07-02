@@ -126,19 +126,46 @@ hr { border: none; border-top: 1px solid #2a2a4a; margin: .75rem 0; }
 .hint { font-size: .8rem; color: var(--muted); margin-top: .4rem; }
 code { background: #0d1b2a; padding: 1px 4px; border-radius: 3px; }
 
-/* ── Bus Scanner / generic result tables ──────────────────────────── */
-#scan-tbl {
+/* ── Tabs ────────────────────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: .4rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.tab-btn {
+  background: var(--card);
+  color: var(--muted);
+  border: 1px solid #2a2a4a;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: .85rem;
+}
+.tab-btn:hover { color: var(--fg); }
+.tab-btn.active {
+  background: var(--accent);
+  color: var(--fg);
+  font-weight: 700;
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── Bus Scanner / Wind register reference / generic result tables ── */
+#scan-tbl, .reg-tbl {
   width: 100%;
   border-collapse: collapse;
   font-size: .8rem;
   margin-top: .5rem;
+  margin-bottom: .75rem;
 }
-#scan-tbl th, #scan-tbl td {
+#scan-tbl th, #scan-tbl td, .reg-tbl th, .reg-tbl td {
   border: 1px solid #2a2a4a;
   padding: 3px 8px;
   text-align: left;
 }
-#scan-tbl th { background: var(--accent); }
+#scan-tbl th, .reg-tbl th { background: var(--accent); }
 
 /* ── Modbus log ──────────────────────────────────────────────────── */
 #log-wrap {

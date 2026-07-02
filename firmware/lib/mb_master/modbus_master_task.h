@@ -24,6 +24,18 @@ typedef struct {
     mb_request_t  request;
     /** Caller-owned queue (capacity >= 1, holds one mb_result_t) the task posts the result to. */
     QueueHandle_t reply_to;
+    /**
+     * false (default — a zero-initialised struct gets this): the task uses
+     * NVS mb_timeout_ms/mb_retries, same as always. true: the task uses
+     * timeout_override_ms/retries_override instead, for exactly this one
+     * transaction — NVS is left untouched (design/api.md §4.1's per-request
+     * timeout_ms/retries, "not persisted"). Every existing caller
+     * (scan_task, wind_poll_task, the Register Explorer) memset()s this
+     * struct to zero, so this defaults to off for all of them.
+     */
+    bool          override_timing;
+    uint16_t      timeout_override_ms;
+    uint8_t       retries_override;
 } mb_task_request_t;
 
 /**
