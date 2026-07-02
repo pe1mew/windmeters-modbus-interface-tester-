@@ -12,6 +12,21 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.2] - 2026-07-02
+
+### Fixed
+
+- The first Modbus transaction(s) after every boot could fail with a CRC
+  or framing error (or, depending what's on the bus, an empty scan
+  result) — `mb_transport_arduino_init()` called `Serial2.begin()` with
+  no RX flush, so a bench-confirmed stray byte left sitting in the buffer
+  got consumed as the leading byte of the first real read, shifting every
+  byte after it by one position. Root-caused and fixed by flushing the RX
+  buffer once, right after `begin()`. Verified by direct before/after
+  reproduction on real hardware — see `memory/gotcha-log.md`.
+
+---
+
 ## [0.4.1] - 2026-07-02
 
 ### Removed

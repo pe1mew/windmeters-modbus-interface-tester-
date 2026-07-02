@@ -40,21 +40,31 @@ fault at first glance, wasn't one). Flushing
 (`while (Serial2.available()) Serial2.read();`) after `begin()` and before
 sending fixed it. See `firmware/src/main.cpp`.
 
-**The first real Modbus transaction after a fresh boot can silently fail —
-reproduced twice, across two separate reboots.** With a real FG6485A wired
-up at address 1, a `POST /api/v1/scan` (or `/scan/start`) run as the very
-first bus activity after a reboot consistently comes back with `found:[]`
-— the device that's demonstrably there and responsive doesn't answer. Every
-scan since (same session, same wiring, no changes) finds it reliably,
-`round_trip_ms` in the same ~379–381ms range each time. Not yet
-root-caused; plausibly related to the UART-glitch-after-`begin()` class of
-issue above (something not fully settled on the bus immediately after
-`Serial2` initialises), but that's a hypothesis, not confirmed — the
-existing RX-flush only runs during the removed bring-up loopback test, not
-on every boot, so if this *is* the same root cause, the fix would need to
-move into `mb_transport_arduino`'s init path instead. If a scan comes back
-suspiciously empty right after a power-cycle/reflash, retry once before
-assuming the bus or the device is actually down.
+**The first real Modbus transaction(s) after a fresh boot can fail — ROOT
+CAUSED AND FIXED 2026-07-02.** Confirmed to be exactly the hypothesis this
+entry originally flagged: the UART-glitch-after-`begin()` stray byte above
+was real, and its fix was never carried from the removed bring-up test
+into the actual `mb_transport_arduino_init()` production path — that
+function called `Serial2.begin()` and returned with zero flush, so the
+stray byte sat queued indefinitely (nothing reads `Serial2` between boot
+and the first real transaction) until the first scan's first read
+consumed it as a fake leading byte, shifting every byte after it by one
+position and corrupting that read's CRC — and often the next read too,
+since the shift leaves one real byte behind for the *next* read to
+mis-consume first. Manifests differently depending what's actually
+listening: with a real bus peer (FG6485A) that DOES reply, the corrupted
+read registers as a CRC error (or two, if the shift cascades into a second
+real reply) rather than the `found:[]` this entry originally reported —
+same root cause, `bus_scan`'s exception-still-counts-as-found path just
+wasn't the thing garbled that time. Fixed by adding the flush
+(`while (Serial2.available()) Serial2.read();`, after a short settle
+delay) directly to `mb_transport_arduino_init()`. Verified by direct
+before/after reproduction on real hardware: a fresh reset + immediate
+narrow scan showed `crc_errors` go from 0→1 (unfixed) with the FG6485A's
+real reply misread as a CRC error, then 0→0 (fixed) with that exact same
+reply correctly parsed as `found`. If this class of symptom ever
+reappears, suspect a *different* stray-byte source (not this one — it's
+closed) before re-opening this entry.
 
 ## Firmware — NVS / `cfg` key names
 
