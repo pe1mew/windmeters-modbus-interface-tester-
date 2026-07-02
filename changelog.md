@@ -34,6 +34,14 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - Design documentation in `design/` (scratchbook, realisation plans,
   progress snapshot) and hardware reference material in `documentation/`
   (AtomS3, Atomic RS485 Base).
+- Repository documentation: README, changelog, contributing guidelines,
+  code of conduct, and license information.
+- `design/api.md` — specification (draft, not yet implemented) of a
+  machine-first JSON-over-HTTP API (`/api/v1/`) so external tools and LLM
+  clients (e.g. Claude) can send Modbus requests and receive replies in a
+  single self-contained round trip: transaction endpoint, bus scan,
+  status/log endpoints, self-description endpoint, and an error model with
+  machine-readable status plus recovery hints.
 
 ### Notes
 
