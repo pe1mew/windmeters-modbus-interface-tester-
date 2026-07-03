@@ -1,14 +1,32 @@
+/**
+ * @file ntp_manager.cpp
+ * @brief Time sync decision/validation core — implementation (TASK-NTP,
+ *        design/completeRealisationPlan.md).
+ *
+ * See ntp_manager.h for the design rationale (why mb_log stores millis()
+ * instead of epoch time, and how this file bridges the two). The public
+ * functions here are pure (no configTime()/settimeofday()/RTC calls) by
+ * construction — that's what makes them host-testable in
+ * test/test_ntp_manager; their doc comments live at the declaration in
+ * ntp_manager.h, not duplicated here.
+ */
 #include "ntp_manager.h"
 
-static bool     s_synced         = false;
-static uint32_t s_millis_at_sync = 0;
-static uint32_t s_epoch_at_sync  = 0;
+static bool     s_synced         = false; /**< true once ntp_manager_record_sync() has been called at least once. */
+static uint32_t s_millis_at_sync = 0;      /**< millis() value at the moment of the most recent sync. */
+static uint32_t s_epoch_at_sync  = 0;      /**< UTC epoch seconds corresponding to s_millis_at_sync. */
 
 bool ntp_manager_should_sync(bool sta_connected, bool already_synced)
 {
     return sta_connected && !already_synced;
 }
 
+/**
+ * @brief Gregorian leap-year rule: divisible by 4, except centuries unless
+ *        also divisible by 400 (so 2000 is a leap year, 2100 is not).
+ * @param year Calendar year, e.g. 2026.
+ * @return true if @p year is a leap year.
+ */
 static bool is_leap_year(uint16_t year)
 {
     return (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0);

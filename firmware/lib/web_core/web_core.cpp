@@ -1,14 +1,34 @@
+/**
+ * @file web_core.cpp
+ * @brief Web server — the testable core, implementation (see web_core.h).
+ *
+ * Pure functions only (JSON building, table lookups, one time-format
+ * conversion) — no I/O, no ESPAsyncWebServer/WiFi calls, fully exercised by
+ * the test_web_core native test suite (`pio test -e native -f test_web_core`).
+ * All snprintf() calls here follow the same truncation contract: writing
+ * stops cleanly at @p out_size and the return value is still the number of
+ * bytes that *would* have been written (snprintf's own convention), so a
+ * caller can detect truncation by comparing the return value against the
+ * buffer size it passed in.
+ */
 #include "web_core.h"
 #include "ntp_manager.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
-/* Same UTC-breakdown either way, but the native test build (MinGW on
+/**
+ * @brief Portable UTC time breakdown: gmtime_r on target, gmtime_s on the
+ *        native/MinGW test build.
+ *
+ * Same UTC-breakdown either way, but the native test build (MinGW on
  * Windows) doesn't expose POSIX gmtime_r — only Microsoft's gmtime_s
  * (reversed argument order, tm* first). The ESP32/Arduino target has no
  * _WIN32 define and takes the gmtime_r branch, matching web_server_task.cpp's
- * own use of it. */
+ * own use of it.
+ * @param epoch Unix epoch seconds to break down.
+ * @param out   Destination for the broken-down UTC time.
+ */
 static void gmtime_portable(time_t epoch, struct tm *out)
 {
 #if defined(_WIN32) || defined(_WIN64)
@@ -23,6 +43,11 @@ uint16_t web_core_modicon_to_raw(uint32_t modicon_number)
     return (uint16_t)((modicon_number % 10000u) - 1u);
 }
 
+/**
+ * @brief scan_state_t -> the WebSocket type:"scan" payload's state string ("idle"/"running"/"cancelled"/"complete").
+ * @param state State to name.
+ * @return Static string literal; never NULL.
+ */
 static const char *scan_state_name(scan_state_t state)
 {
     switch (state) {
@@ -70,6 +95,11 @@ int web_core_build_scan_json(char *out, size_t out_size, const bus_scan_status_t
     return n;
 }
 
+/**
+ * @brief wind_sensor_type_t -> its JSON "sensor_type" string ("speed"/"direction").
+ * @param type Sensor type to name.
+ * @return Static string literal; never NULL.
+ */
 static const char *wind_sensor_type_name(wind_sensor_type_t type)
 {
     return (type == WIND_SENSOR_SPEED) ? "speed" : "direction";
@@ -132,6 +162,26 @@ int web_core_build_status_json(char *out, size_t out_size,
  * Machine API (design/api.md)
  * ------------------------------------------------------------------------- */
 
+/**
+ * @brief Format @p count bytes as uppercase space-separated hex (design/api.md §3's raw_tx/raw_rx shape).
+ *
+ * Stops appending once @p out_size is reached rather than overrunning it —
+ * on truncation the returned count no longer reflects "bytes that would
+ * have been written" the way a single snprintf() call's return does,
+ * since the loop simply breaks instead of continuing to tally; callers in
+ * this file only ever pass buffers sized generously enough (raw frames
+ * are MB_MAX_FRAME_LEN, buffers are 800 bytes) that this path isn't hit
+ * in practice.
+ *
+ * @param out       Destination buffer for the hex text (no null terminator
+ *                   added by this function — callers snprintf() this
+ *                   result into a larger `"%s"` slot, which terminates it).
+ * @param out_size  Capacity of @p out.
+ * @param bytes     Bytes to format, @p count entries; NULL/0 yields an
+ *                   empty (zero-length) result.
+ * @param count     Number of entries in @p bytes.
+ * @return Number of characters written into @p out.
+ */
 static int format_hex(char *out, size_t out_size, const uint8_t *bytes, uint16_t count)
 {
     int n = 0;
@@ -148,6 +198,23 @@ static int format_hex(char *out, size_t out_size, const uint8_t *bytes, uint16_t
     return n;
 }
 
+/**
+ * @brief Format @p count register values as a comma-separated JSON array body (no brackets — caller wraps them).
+ *
+ * Same truncate-cleanly-at-@p out_size behaviour and caveat as
+ * format_hex(): breaks the loop rather than overrunning, so the return
+ * value stops reflecting "bytes that would have been written" once
+ * truncation actually happens. In practice the 800-byte values_buf in
+ * web_core_build_api_modbus_ok_json() is sized well past what 125
+ * registers (`"%u"` values, comma-separated) can produce.
+ *
+ * @param out       Destination buffer for the array body text (no null
+ *                   terminator added — see format_hex()'s same note).
+ * @param out_size  Capacity of @p out.
+ * @param values    Register values to format, @p count entries.
+ * @param count     Number of entries in @p values.
+ * @return Number of characters written into @p out.
+ */
 static int format_u16_array(char *out, size_t out_size, const uint16_t *values, uint8_t count)
 {
     int n = 0;
@@ -403,6 +470,18 @@ int web_core_build_api_log_json(char *out, size_t out_size, const mb_log_entry_t
     return n;
 }
 
+/**
+ * @brief scan_state_t -> design/api.md §5.3's own state vocabulary
+ *        ("idle"/"scanning"/"cancelled"/"done").
+ *
+ * Deliberately not scan_state_name() above: api.md documents "scanning"/
+ * "done" for the machine API while the WebSocket type:"scan" payload uses
+ * "running"/"complete" — two separate string sets for the same enum, each
+ * matching the wire contract its own consumer was promised.
+ *
+ * @param state State to name.
+ * @return Static string literal; never NULL.
+ */
 static const char *api_scan_state_name(scan_state_t state)
 {
     switch (state) {

@@ -1,6 +1,13 @@
+/**
+ * @file bus_scan.cpp
+ * @brief Bus Scanner core state machine — implementation. See bus_scan.h
+ * for the public API contract; this file has no queue/task/UART calls, so
+ * it's host-testable in isolation from scan_task.cpp.
+ */
 #include "bus_scan.h"
 #include <string.h>
 
+/** @brief The one global sweep's state. Single instance — this module tracks exactly one scan at a time, never re-entrant. */
 static bus_scan_status_t s_status;
 
 bool bus_scan_did_respond(mb_status_t status)

@@ -25,9 +25,15 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/**
+ * @brief Which physical sensor a given build reports (TDS FR-S03) — picked
+ * at compile time, not something read off the wire (there is no type
+ * register). Passed to wind_poll_decode() to select which input-register
+ * fields are meaningful for the current build; see wind_reading_t.
+ */
 typedef enum {
-    WIND_SENSOR_SPEED = 0,
-    WIND_SENSOR_DIRECTION,
+    WIND_SENSOR_SPEED = 0,   /**< Anemometer build, slave address 30 (or 35 jumpered). */
+    WIND_SENSOR_DIRECTION,   /**< Wind-vane build, slave address 31 (or 36 jumpered). */
 } wind_sensor_type_t;
 
 /**
@@ -60,6 +66,8 @@ typedef struct {
  * @brief Number of input registers the DUT implements (TDS §2.7) — always
  * 12 (raw 0x0000-0x000B), identical on both builds (FR-MB27). Read as one
  * FC04 block starting at 0x0000.
+ * @return Always 12 — a function rather than a bare constant so callers
+ *         (wind_poll_task.cpp) don't hardcode the register count either.
  */
 uint8_t wind_sensor_input_register_count(void);
 
@@ -68,6 +76,13 @@ uint8_t wind_sensor_input_register_count(void);
  * into engineering units for @p type. The wire layout is identical
  * regardless of type (FR-MB27) — only which fields are meaningful for the
  * caller differs; see wind_reading_t's field comments.
+ * @param type          Which physical sensor this build reports; selects
+ *                       whether dir_fault can be set (direction only).
+ * @param raw_registers Exactly 12 raw register values, in wire order,
+ *                       as read by one FC04 starting at 0x0000. Caller-owned.
+ * @param out           Destination for the decoded reading. Caller-owned;
+ *                       fully overwritten (every field), not merged with
+ *                       any prior contents.
  */
 void wind_poll_decode(wind_sensor_type_t type, const uint16_t raw_registers[12], wind_reading_t *out);
 
@@ -92,19 +107,41 @@ typedef enum {
  * a fixed mapping, identical on both builds (FR-MB27), unlike the
  * pre-TDS-v0.6 design this replaced where the address depended on sensor
  * type.
+ * @param field Which config field to map.
+ * @return Raw 0-based holding register address (0x0000-0x0003) for
+ *         @p field; 0xFFFF if @p field is not a valid wind_config_field_t
+ *         value (defensive — callers should never pass one).
  */
 uint16_t wind_config_field_register(wind_config_field_t field);
 
 /**
  * @brief Number of holding registers the DUT implements (TDS §2.8) —
  * always 4 (raw 0x0000-0x0003), identical on both builds.
+ * @return Always 4 — a function rather than a bare constant so callers
+ *         (wind_poll_task.cpp) don't hardcode the register count either.
  */
 uint8_t wind_sensor_holding_register_count(void);
 
-/** @brief Engineering-unit value -> raw register value to write via FC06 (TDS §2.8 scaling). */
+/**
+ * @brief Engineering-unit value -> raw register value to write via FC06 (TDS §2.8 scaling).
+ * @param field Which config field @p value belongs to; selects the scale
+ *              factor (×10 for DIR_OFFSET/LOW_SPEED_CUTOFF, unscaled for
+ *              the two window fields).
+ * @param value Engineering-unit value to encode (e.g. degrees, m/s, ms, s
+ *              — see wind_config_field_t's field comments for units/range).
+ * @return Raw register value ready to write via FC06. Not range-checked
+ *         against the field's valid range (TDS §2.8) — the caller (or the
+ *         DUT itself, via a Modbus exception) is responsible for that.
+ */
 uint16_t wind_config_field_encode(wind_config_field_t field, float value);
 
-/** @brief Raw register value (from an FC03 read) -> engineering-unit value. */
+/**
+ * @brief Raw register value (from an FC03 read) -> engineering-unit value.
+ * @param field     Which config field @p raw_value belongs to; selects the
+ *                  scale factor, the inverse of wind_config_field_encode().
+ * @param raw_value Raw register value as read via FC03.
+ * @return Decoded engineering-unit value.
+ */
 float wind_config_field_decode(wind_config_field_t field, uint16_t raw_value);
 
 /**
@@ -112,5 +149,10 @@ float wind_config_field_decode(wind_config_field_t field, uint16_t raw_value);
  *
  * Unsigned subtraction is correct modulo 2^32 across a millis() wraparound
  * — same reasoning as ntp_manager_millis_to_epoch().
+ *
+ * @param now_ms       Caller's current time.
+ * @param last_poll_ms Time of the last successful poll.
+ * @param interval_ms  Configured poll interval.
+ * @return true if (now_ms - last_poll_ms) >= interval_ms; false otherwise.
  */
 bool wind_poll_interval_elapsed(uint32_t now_ms, uint32_t last_poll_ms, uint32_t interval_ms);

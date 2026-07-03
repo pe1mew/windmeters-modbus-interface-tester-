@@ -1,5 +1,16 @@
+/**
+ * @file cfg.cpp
+ * @brief Configuration persistence (LIB-NVS) — implementation.
+ *
+ * Every cfg_* call is a one-line forward to the bound backend's matching
+ * callback (see cfg_backend.h) — this file owns no storage of its own, only
+ * the single s_backend pointer, so all the type-specific logic and
+ * truncation behaviour lives in whichever backend is bound. See cfg.h for
+ * the documented contract of each function.
+ */
 #include "cfg.h"
 
+/** @brief Backend bound by cfg_init(); NULL until then. Every cfg_* call below dereferences it without a NULL check — callers must call cfg_init() first. */
 static const cfg_backend_t *s_backend = 0;
 
 void cfg_init(const cfg_backend_t *backend)

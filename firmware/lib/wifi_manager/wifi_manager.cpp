@@ -1,3 +1,13 @@
+/**
+ * @file wifi_manager.cpp
+ * @brief WiFi manager decision core — implementation (TASK-WIFI,
+ *        design/completeRealisationPlan.md).
+ *
+ * See wifi_manager.h for the design rationale. All three functions here are
+ * pure (no WiFi.* / radio calls) by construction, which is what makes them
+ * host-testable in test/test_wifi_manager — the doc comments for each live
+ * at the declaration in wifi_manager.h, not duplicated here.
+ */
 #include "wifi_manager.h"
 #include <stdio.h>
 

@@ -1,3 +1,10 @@
+/**
+ * @file scan_task.cpp
+ * @brief FreeRTOS/Arduino orchestration around the bus_scan core —
+ * implementation. See scan_task.h for the public API contract; this file
+ * is Arduino-only and has no tests of its own (the state machine it drives
+ * is tested via bus_scan.h/.cpp instead).
+ */
 #ifdef ARDUINO
 #include "scan_task.h"
 #include "modbus_master_task.h"
@@ -5,15 +12,21 @@
 #include <Arduino.h>
 #include <string.h>
 
-#define PROBE_REPLY_TIMEOUT_MS 2000u
-#define PROBE_FC 0x04
+#define PROBE_REPLY_TIMEOUT_MS 2000u /**< How long to wait for one probe's reply before treating that address as no-response. */
+#define PROBE_FC 0x04                /**< FC04 (read input registers) — the probe function code, arbitrary count 1. */
 
+/**
+ * @brief Command posted to s_command_queue by scan_task_request_start()/
+ * scan_task_request_cancel(). Deliberately small/POD so it's cheap to copy
+ * through a FreeRTOS queue.
+ */
 typedef struct {
-    bool    is_cancel;
-    uint8_t range_start;
-    uint8_t range_end;
+    bool    is_cancel;   /**< true = stop the in-progress sweep (range_start/range_end unused); false = start a new sweep using range_start/range_end. */
+    uint8_t range_start; /**< First address to probe; only meaningful when is_cancel is false. */
+    uint8_t range_end;   /**< Last address to probe (inclusive); only meaningful when is_cancel is false. */
 } scan_command_t;
 
+/** @brief Queue scan_task_fn() blocks on; holds scan_command_t. Created in scan_task_start(), NULL before that. */
 static QueueHandle_t s_command_queue = 0;
 
 /** @brief Probe one address (FC04, 1 register at 0x0000) through the real master task and record the outcome. */
@@ -53,6 +66,12 @@ static void check_for_cancel(void)
     }
 }
 
+/**
+ * @brief Task body: waits for a start command, then drives a full sweep
+ * (probing each address in turn and polling for a cancel between probes)
+ * before returning to waiting. A cancel command received while idle is
+ * silently dropped — there's nothing to cancel.
+ */
 static void scan_task_fn(void * /*pvParameters*/)
 {
     scan_command_t cmd;

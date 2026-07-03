@@ -1,0 +1,45 @@
+# Doxygen configuration for the Windmeters Modbus Interface Tester firmware.
+#
+# Only the settings that differ from Doxygen's built-in defaults are listed
+# here — everything else (1.17.0 defaults) applies. Regenerate the full
+# effective config with `doxygen -x Doxyfile` if you need to see it all.
+#
+# Usage: `doxygen` from the repo root. Output goes to docs/doxygen/html/
+# (gitignored — this file is the source of truth, not the generated site).
+
+PROJECT_NAME           = "Windmeters Modbus Interface Tester"
+PROJECT_BRIEF          = "Modbus RTU master bench tool firmware (M5Stack AtomS3 + Atomic RS485 Base)"
+PROJECT_NUMBER         = 0.4.2
+OUTPUT_DIRECTORY       = docs/doxygen
+
+INPUT                  = firmware/lib firmware/src
+RECURSIVE               = YES
+FILE_PATTERNS           = *.h *.cpp
+
+# Native-build code (test/) and generated GUI assets (data/) are out of
+# scope — this documents the firmware's own C/C++ source only.
+
+JAVADOC_AUTOBRIEF       = YES
+EXTRACT_ALL             = NO
+EXTRACT_STATIC          = YES
+EXTRACT_LOCAL_METHODS   = YES
+
+# Real firmware behaviour lives in the `#ifdef ARDUINO` branches (the native
+# test build takes the other side of those guards) — expand that macro so
+# Doxygen documents the code that actually ships, not the test stub.
+ENABLE_PREPROCESSING    = YES
+MACRO_EXPANSION         = YES
+EXPAND_ONLY_PREDEF      = YES
+PREDEFINED              = ARDUINO=1
+
+WARN_IF_UNDOCUMENTED    = YES
+WARN_IF_DOC_ERROR       = YES
+WARN_IF_INCOMPLETE_DOC  = YES
+WARN_NO_PARAMDOC        = YES
+WARN_AS_ERROR           = NO
+
+GENERATE_HTML           = YES
+GENERATE_LATEX          = NO
+GENERATE_TREEVIEW       = YES
+
+QUIET                   = YES

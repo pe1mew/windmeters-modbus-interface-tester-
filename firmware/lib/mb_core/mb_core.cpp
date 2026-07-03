@@ -1,17 +1,29 @@
+/**
+ * @file mb_core.cpp
+ * @brief Modbus RTU master — implementation (MB-1, design/realisationPlan.md §2).
+ *
+ * All state (transport pointer, timeout/retry config, last-tx/rx scratch
+ * buffers) is file-static — this module is a singleton, matching the
+ * "not thread-safe, exactly one caller" contract documented in mb_core.h.
+ * The last-tx/rx/attempts/exception scratch fields are cleared at the top
+ * of each public entry point (not just inside do_transaction()) so a call
+ * rejected by parameter validation can't leave a previous call's bytes
+ * looking like they belong to it.
+ */
 #include "mb_core.h"
 #include "mb_frame.h"
 #include <string.h>
 
-static const mb_transport_t *s_transport   = 0;
-static uint16_t               s_timeout_ms = 200;
-static uint8_t                s_retries    = 1;
-static uint8_t                s_last_exception = 0;
+static const mb_transport_t *s_transport   = 0;  /**< Injected byte transport; 0 until mb_init(). */
+static uint16_t               s_timeout_ms = 200; /**< Per-attempt response timeout, ms. */
+static uint8_t                s_retries    = 1;   /**< Additional attempts after the first. */
+static uint8_t                s_last_exception = 0; /**< Scratch: exception code from the most recent MB_ERR_EXCEPTION. */
 
-static uint8_t  s_last_tx[MB_MAX_FRAME_LEN];
-static uint16_t s_last_tx_len = 0;
-static uint8_t  s_last_rx[MB_MAX_FRAME_LEN];
-static uint16_t s_last_rx_len = 0;
-static uint8_t  s_last_attempts = 0;
+static uint8_t  s_last_tx[MB_MAX_FRAME_LEN]; /**< Scratch: request frame bytes from the most recent mb_* call. */
+static uint16_t s_last_tx_len = 0;           /**< Valid bytes in s_last_tx; 0 if nothing was sent. */
+static uint8_t  s_last_rx[MB_MAX_FRAME_LEN]; /**< Scratch: response frame bytes from the most recent mb_* call. */
+static uint16_t s_last_rx_len = 0;           /**< Valid bytes in s_last_rx; 0 if nothing was received. */
+static uint8_t  s_last_attempts = 0;         /**< Attempts (1 + retries consumed) the most recent mb_* call took. */
 
 void mb_init(const mb_transport_t *transport, uint16_t timeout_ms, uint8_t retries)
 {
@@ -43,6 +55,13 @@ uint8_t mb_get_last_attempts(void)
     return s_last_attempts;
 }
 
+/**
+ * @brief Map mb_frame.h's parse result onto the public mb_status_t.
+ * @param fs Result from an mb_parse_*_response() call.
+ * @return Corresponding mb_status_t (MB_ERR_FRAMING for any unrecognised
+ *         value, which mb_frame.h's enum shouldn't produce but the default
+ *         case guards against anyway).
+ */
 static mb_status_t frame_status_to_mb_status(mb_frame_status_t fs)
 {
     switch (fs) {
@@ -63,6 +82,10 @@ static mb_status_t frame_status_to_mb_status(mb_frame_status_t fs)
  * exists for a slave that occasionally misses a request, not to paper over
  * a persistently wrong response.
  *
+ * @param req      Request frame bytes to send, already built and CRC'd.
+ * @param req_len  Length of @p req in bytes.
+ * @param[out] resp Buffer to receive the response frame; must hold at
+ *                   least MB_MAX_FRAME_LEN bytes.
  * @param[out] resp_len Set to the number of bytes received on success.
  * @return MB_OK if *something* was received (caller still has to parse it),
  *         MB_ERR_TIMEOUT if every attempt (1 + retries) got nothing back.
@@ -92,6 +115,24 @@ static mb_status_t do_transaction(const uint8_t *req, uint16_t req_len,
     return MB_ERR_TIMEOUT;
 }
 
+/**
+ * @brief Shared FC03/FC04 implementation: validate, build request, run the
+ *        transaction, parse the response.
+ *
+ * mb_read_holding_registers() and mb_read_input_registers() are both thin
+ * wrappers that only differ in the function code passed here as @p fc.
+ *
+ * @param addr  Slave address, 1-247 (0 = broadcast, rejected).
+ * @param fc    0x03 (holding) or 0x04 (input).
+ * @param start Raw 0-based register address.
+ * @param count 1-125 (validated here against MB_MAX_READ_REGISTERS).
+ * @param out   Buffer for @p count decoded register values.
+ * @return MB_OK on a valid matching response; MB_ERR_PARAM if @p addr is 0,
+ *         @p out is NULL, or @p count is 0 or exceeds MB_MAX_READ_REGISTERS
+ *         (rejected before touching the transport, so the last-tx/rx/
+ *         attempts scratch state is left zeroed, not stale); otherwise the
+ *         transport/frame error that occurred.
+ */
 static mb_status_t read_registers(uint8_t addr, uint8_t fc, uint16_t start,
                                    uint8_t count, uint16_t *out)
 {

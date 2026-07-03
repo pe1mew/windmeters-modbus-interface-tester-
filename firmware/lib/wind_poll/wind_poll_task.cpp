@@ -1,3 +1,10 @@
+/**
+ * @file wind_poll_task.cpp
+ * @brief FreeRTOS/Arduino orchestration around the wind_poll core —
+ * implementation. See wind_poll_task.h for the public API contract; this
+ * file is Arduino-only and has no tests of its own (the decode/encode
+ * math it drives is tested via wind_poll.h/.cpp instead).
+ */
 #ifdef ARDUINO
 #include "wind_poll_task.h"
 #include "modbus_master_task.h"
@@ -6,17 +13,28 @@
 #include <Arduino.h>
 #include <string.h>
 
-#define REPLY_TIMEOUT_MS 2000u
-#define POLL_CHECK_INTERVAL_MS 100u
+#define REPLY_TIMEOUT_MS 2000u         /**< Reply-wait budget for each queued Modbus request this task submits. */
+#define POLL_CHECK_INTERVAL_MS 100u    /**< How often the task wakes to check whether it's due for its next poll. */
 
-static bool               s_active        = false;
-static uint8_t             s_target_addr   = 0;
-static wind_sensor_type_t s_active_type   = WIND_SENSOR_SPEED;
-static wind_reading_t     s_latest;
-static bool                s_has_data      = false;
-static uint32_t            s_last_poll_ms  = 0;
+static bool               s_active        = false; /**< Set by wind_poll_set_active(); gates whether wind_poll_task_fn() submits any bus traffic. */
+static uint8_t             s_target_addr   = 0; /**< Slave address currently (or most recently) targeted; set by wind_poll_set_active(). */
+static wind_sensor_type_t s_active_type   = WIND_SENSOR_SPEED; /**< Sensor type currently (or most recently) targeted; set by wind_poll_set_active(). */
+static wind_reading_t     s_latest; /**< Last successfully decoded reading; stale-but-kept on a failed poll, see wind_poll_get_latest(). */
+static bool                s_has_data      = false; /**< Has any poll ever succeeded? Sticky — never reset back to false. */
+static uint32_t            s_last_poll_ms  = 0; /**< millis() timestamp of the last successful poll; meaningful only when s_has_data is true. */
 
-/** @brief Submit a read (FC03/FC04) through modbus_master_task's queue and wait for the reply. */
+/**
+ * @brief Submit a read (FC03/FC04) through modbus_master_task's queue and wait for the reply.
+ * @param addr  Slave address to read, 1-247.
+ * @param fc    Function code to submit — 0x03 (holding) or 0x04 (input).
+ * @param start Raw 0-based starting register address.
+ * @param count Number of registers to read; @p out must hold at least this many.
+ * @param out   Destination for the decoded register values. Caller-owned;
+ *              only written when this returns true.
+ * @return true if the transaction completed with MB_OK within
+ *         REPLY_TIMEOUT_MS and @p out was populated; false otherwise
+ *         (timeout, or any non-MB_OK status).
+ */
 static bool do_read_registers(uint8_t addr, uint8_t fc, uint16_t start, uint8_t count, uint16_t *out)
 {
     QueueHandle_t reply_queue = xQueueCreate(1, sizeof(mb_result_t));
@@ -40,7 +58,14 @@ static bool do_read_registers(uint8_t addr, uint8_t fc, uint16_t start, uint8_t 
     return ok;
 }
 
-/** @brief Submit a single-register write (FC06) through modbus_master_task's queue and wait for the reply. */
+/**
+ * @brief Submit a single-register write (FC06) through modbus_master_task's queue and wait for the reply.
+ * @param addr  Slave address to write, 1-247.
+ * @param reg   Raw 0-based holding register address to write.
+ * @param value Raw register value to write (already encoded — see wind_config_field_encode()).
+ * @return true if the slave echoed the write back unchanged (MB_OK) within
+ *         REPLY_TIMEOUT_MS; false on timeout or any other status.
+ */
 static bool do_write_single(uint8_t addr, uint16_t reg, uint16_t value)
 {
     QueueHandle_t reply_queue = xQueueCreate(1, sizeof(mb_result_t));
@@ -63,6 +88,13 @@ static bool do_write_single(uint8_t addr, uint16_t reg, uint16_t value)
     return ok;
 }
 
+/**
+ * @brief Task body: while active and the configured poll interval has
+ * elapsed (or no data has ever been fetched yet), reads all 12 input
+ * registers and decodes them; otherwise idles. A failed read leaves
+ * s_latest/s_has_data/s_last_poll_ms untouched so the last good reading
+ * survives a transient bus error rather than being blanked.
+ */
 static void wind_poll_task_fn(void * /*pvParameters*/)
 {
     for (;;) {

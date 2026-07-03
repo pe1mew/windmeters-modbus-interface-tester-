@@ -1,3 +1,31 @@
+/**
+ * @file web_server_task.cpp
+ * @brief HTTP + WebSocket server implementation (TASK-WEB).
+ *
+ * One AsyncWebServer (port 80) plus one AsyncWebSocket ("/ws") instance,
+ * both file-static singletons — this module, like the tasks it fronts, has
+ * exactly one of itself. Two client-facing surfaces share that same
+ * server/socket pair:
+ *
+ * - The human web UI (SPIFFS-served GUI in firmware/data/, app.js): the
+ *   original REST endpoints under "/" (scan, wind, explorer, settings) plus
+ *   a periodic WebSocket broadcast (broadcast_task_fn()) that pushes
+ *   type-tagged JSON (status/scan/wind/log) so the page never has to poll.
+ *   These endpoints always answer HTTP 200 and report failure as a bare
+ *   `{"ok":false}` — the GUI already knows what it asked for.
+ * - The machine-first API under "/api/v1/" (design/api.md): one
+ *   self-contained HTTP round trip per call, real HTTP status codes
+ *   (400/409/500 as well as 200), and machine-readable `status` plus
+ *   human/LLM-readable `detail`/`hint` prose on failure (design/api.md §7).
+ *   Built for a scripted or LLM-driven client that can't cheaply hold a
+ *   WebSocket open or poll.
+ *
+ * Both surfaces funnel Modbus transactions through the same
+ * modbus_master_task queue via mb_queue_transact() — one RS-485 UART, one
+ * owner, every caller (scan, wind poll, explorer, API) serialises behind
+ * it. register_*_endpoints() below groups route registration by feature
+ * area; each doc comment states which paths it owns.
+ */
 #ifdef ARDUINO
 #include "web_server_task.h"
 #include <Arduino.h>
@@ -21,29 +49,57 @@
 #include "scan_task.h"
 #include "wind_poll_task.h"
 
-#define STATUS_BROADCAST_INTERVAL_MS 1000u
-#define EXPLORER_REPLY_TIMEOUT_MS    2000u
+#define STATUS_BROADCAST_INTERVAL_MS 1000u /**< Cadence of broadcast_task_fn()'s periodic WebSocket push. */
+#define EXPLORER_REPLY_TIMEOUT_MS    2000u /**< Reply-wait budget for /explorer/query's mb_queue_transact() call. */
 
-/* platformio.ini's [env:windmeterTester] build_flags sets this; fallback
- * so a build that somehow skips it still compiles instead of failing on
- * an undefined macro, and reports something visibly wrong rather than a
- * plausible-looking stale number. */
+/**
+ * @brief Firmware version string reported via WS status / GET /api/v1/status / the GUI footer.
+ *
+ * platformio.ini's [env:windmeterTester] build_flags sets this; the
+ * fallback below is so a build that somehow skips it still compiles
+ * instead of failing on an undefined macro, and reports something visibly
+ * wrong rather than a plausible-looking stale number.
+ */
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "0.0.0-unversioned"
 #endif
 
+/**
+ * @brief The one HTTP server instance, serving both the human GUI and /api/v1/.
+ *
+ * Doxygen's parser reads this constructor-call declaration as function-
+ * shaped; there is no actual return value — it's a file-static object.
+ * @return Not applicable — see above.
+ */
 static AsyncWebServer s_server(80);
+/**
+ * @brief The one WebSocket endpoint, pushed to by broadcast_task_fn().
+ *
+ * Doxygen's parser reads this constructor-call declaration as function-
+ * shaped; there is no actual return value — it's a file-static object.
+ * @return Not applicable — see above.
+ */
 static AsyncWebSocket s_ws("/ws");
 
 /* ---------------------------------------------------------------------------
  * Small helpers
  * --------------------------------------------------------------------------- */
 
+/**
+ * @brief Send the human-GUI endpoints' bare `{"ok":true|false}` reply.
+ * @param request The in-flight request to reply to.
+ * @param ok       Whether the operation succeeded — HTTP 200 either way,
+ *                 these routes don't use HTTP status codes for outcome,
+ *                 unlike the /api/v1/ routes.
+ */
 static void send_ok(AsyncWebServerRequest *request, bool ok)
 {
     request->send(200, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
 }
 
+/**
+ * @brief Outcome of one mb_queue_transact() call — did the request even get sent, and did a reply come back.
+ */
 typedef enum {
     MB_TRANSACT_OK,        /**< Enqueued and a reply arrived within reply_wait_ms. */
     MB_TRANSACT_BUSY,      /**< block_on_enqueue == false and the queue was full — nothing was sent. */
@@ -69,6 +125,13 @@ typedef enum {
  *                          false: fail fast — design/api.md §4.1's
  *                          `"wait":false` — nothing is sent if the queue is
  *                          momentarily full.
+ * @param task_req   Request to submit; this function sets its `reply_to`
+ *                   field, so the caller should have already filled in
+ *                   everything else.
+ * @param[out] out_result Filled in with the reply when the outcome is
+ *                        MB_TRANSACT_OK; untouched otherwise.
+ * @return Outcome — whether the request was even enqueued, and whether a
+ *         reply arrived within @p reply_wait_ms.
  */
 static mb_transact_outcome_t mb_queue_transact(mb_task_request_t *task_req, mb_result_t *out_result,
                                                 uint32_t reply_wait_ms, bool block_on_enqueue)
@@ -90,6 +153,11 @@ static mb_transact_outcome_t mb_queue_transact(mb_task_request_t *task_req, mb_r
     return outcome;
 }
 
+/**
+ * @brief Send an /api/v1/ HTTP 400 `"bad_request"` reply (design/api.md §7) — used when a field fails validation before anything touches the bus.
+ * @param request The in-flight request to reply to.
+ * @param detail Human-readable reason, embedded verbatim into the JSON `detail` field (no escaping — caller must pass text safe for a JSON string literal).
+ */
 static void send_bad_request(AsyncWebServerRequest *request, const char *detail)
 {
     char buf[192];
@@ -97,7 +165,20 @@ static void send_bad_request(AsyncWebServerRequest *request, const char *detail)
     request->send(400, "application/json", buf);
 }
 
-/** @brief Fill in detail/hint prose for a bus-level POST /api/v1/modbus failure (design/api.md §4.3/§7). Best-effort wording — clients must branch on `status`, never this text. */
+/**
+ * @brief Fill in detail/hint prose for a bus-level POST /api/v1/modbus failure (design/api.md §4.3/§7). Best-effort wording — clients must branch on `status`, never this text.
+ * @param status         Outcome to explain; selects which prose branch runs.
+ * @param slave          Slave address the request targeted.
+ * @param fc             Function code the request used (only quoted for MB_ERR_EXCEPTION).
+ * @param register_addr  Unused — kept for a uniform call signature across callers; see the `(void)` cast at the top of the body.
+ * @param exception_code Slave's exception code (only meaningful for MB_ERR_EXCEPTION).
+ * @param attempts       Attempts consumed (only quoted for MB_ERR_TIMEOUT).
+ * @param timeout_ms     Per-attempt timeout that was in effect (only quoted for MB_ERR_TIMEOUT).
+ * @param[out] detail    Buffer to receive the machine-oriented one-line detail string.
+ * @param detail_size    Capacity of @p detail in bytes.
+ * @param[out] hint      Buffer to receive the human/LLM-oriented troubleshooting hint.
+ * @param hint_size      Capacity of @p hint in bytes.
+ */
 static void build_modbus_error_detail_hint(mb_status_t status, uint8_t slave, uint8_t fc, uint16_t register_addr,
                                             uint8_t exception_code, uint8_t attempts, uint16_t timeout_ms,
                                             char *detail, size_t detail_size, char *hint, size_t hint_size)
@@ -144,6 +225,9 @@ static void build_modbus_error_detail_hint(mb_status_t status, uint8_t slave, ui
  * Periodic WebSocket broadcast — status always, scan/wind while active
  * --------------------------------------------------------------------------- */
 
+/**
+ * @brief Build and push the WebSocket `type:"status"` payload — Wi-Fi, NTP, uptime, and Modbus bus health. Sent unconditionally on every broadcast tick, unlike the scan/wind broadcasts below which are gated on activity.
+ */
 static void broadcast_status(void)
 {
     wifi_status_t wifi = wifi_manager_get_status();
@@ -170,6 +254,7 @@ static void broadcast_status(void)
     s_ws.textAll(json);
 }
 
+/** @brief Push the WebSocket `type:"scan"` payload, but only while a scan is running or has a just-finished result to show — SCAN_IDLE means nothing has happened yet, so skip the broadcast rather than spam clients with an empty result every tick. */
 static void broadcast_scan_if_active(void)
 {
     bus_scan_status_t status = bus_scan_get_status();
@@ -181,6 +266,7 @@ static void broadcast_scan_if_active(void)
     s_ws.textAll(json);
 }
 
+/** @brief Push the WebSocket `type:"wind"` payload for whichever sensor type wind_poll_task currently has active; a no-op when nothing is polling (only one of speed/direction can be active at a time). */
 static void broadcast_wind_if_active(void)
 {
     if (!wind_poll_is_active()) {
@@ -193,6 +279,10 @@ static void broadcast_wind_if_active(void)
     s_ws.textAll(json);
 }
 
+/**
+ * @brief Push one WebSocket `type:"log"` payload for a single TX or RX traffic-log entry.
+ * @param entry Log entry to broadcast; its raw bytes are hex-encoded and its timestamp reformatted to HH:MM:SS for the GUI table (see the `ts_buf` comment below for why this differs from /api/v1/log's own timestamp contract).
+ */
 static void broadcast_one_log_entry(const mb_log_entry_t *entry)
 {
     char hex[3 * 256] = {0};
@@ -214,8 +304,16 @@ static void broadcast_one_log_entry(const mb_log_entry_t *entry)
     s_ws.textAll(json);
 }
 
-static uint32_t s_last_broadcast_total = 0;
+static uint32_t s_last_broadcast_total = 0; /**< mblog_total_appended() value as of the last broadcast tick. */
 
+/**
+ * @brief Broadcast every mb_log_entry_t appended since the last broadcast tick, oldest first.
+ *
+ * Diffs mblog_total_appended() against s_last_broadcast_total rather than
+ * just looking at the newest entry — see the comment inside this function
+ * for why (a TX+RX pair landing in the same tick would otherwise silently
+ * drop the TX). No-op when nothing new has been logged.
+ */
 static void broadcast_new_log_entries(void)
 {
     /* mb_master_process() logs a TX entry immediately followed by an RX
@@ -246,6 +344,19 @@ static void broadcast_new_log_entries(void)
     }
 }
 
+/**
+ * @brief FreeRTOS task trampoline for the periodic WebSocket broadcast loop (xTaskCreatePinnedToCore in web_server_task_start()).
+ *
+ * Runs every STATUS_BROADCAST_INTERVAL_MS (1000 ms), unconditionally, for
+ * the life of the device. Each tick: broadcast_status() always fires;
+ * broadcast_scan_if_active() and broadcast_wind_if_active() only push a
+ * payload when a scan/wind-poll is actually running, so idle clients don't
+ * get spammed with empty results; broadcast_new_log_entries() pushes
+ * whatever traffic-log entries appeared since the previous tick, which may
+ * be zero, one, or several (a TX+RX pair from one transaction, or a burst
+ * from a fast poll). All four fire from a single 1 Hz cadence — there is no
+ * separate faster/slower channel for any one payload type.
+ */
 static void broadcast_task_fn(void * /*pvParameters*/)
 {
     for (;;) {
@@ -261,8 +372,10 @@ static void broadcast_task_fn(void * /*pvParameters*/)
  * REST endpoints
  * --------------------------------------------------------------------------- */
 
+/** @brief Register the human-GUI scan-control routes: POST /scan/start, POST /scan/stop. Fire-and-forget — progress/results arrive over the WebSocket broadcast (broadcast_scan_if_active()), not in these responses. */
 static void register_scan_endpoints(void)
 {
+    // POST /scan/start — persist the requested address range to NVS and kick off scan_task; result comes back via WebSocket, not this response.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/scan/start", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         uint8_t start = o["start"] | (uint8_t)cfg_get_u8(CFG_KEY_SCAN_RANGE_START, CFG_DEFAULT_SCAN_RANGE_START);
@@ -273,18 +386,28 @@ static void register_scan_endpoints(void)
         send_ok(request, true);
     }));
 
+    // POST /scan/stop — request scan_task cancel the in-progress sweep.
     s_server.on("/scan/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
         scan_task_request_cancel();
         send_ok(request, true);
     });
 }
 
-/** @brief JSON `"type"` field ("speed"/"direction") -> wind_sensor_type_t. Defaults to WIND_SENSOR_SPEED for a missing/unrecognised value — same fail-open-to-a-defined-default convention as the rest of this file's o["field"] | default parsing. */
+/**
+ * @brief JSON `"type"` field ("speed"/"direction") -> wind_sensor_type_t. Defaults to WIND_SENSOR_SPEED for a missing/unrecognised value — same fail-open-to-a-defined-default convention as the rest of this file's o["field"] | default parsing.
+ * @param type_str Raw JSON string value, possibly NULL.
+ * @return WIND_SENSOR_DIRECTION only for an exact "direction" match; WIND_SENSOR_SPEED otherwise.
+ */
 static wind_sensor_type_t parse_wind_sensor_type(const char *type_str)
 {
     return (type_str && strcmp(type_str, "direction") == 0) ? WIND_SENSOR_DIRECTION : WIND_SENSOR_SPEED;
 }
 
+/**
+ * @brief NVS-stored default Modbus address for a wind sensor type (CFG_KEY_WIND_DIR_ADDR / CFG_KEY_WIND_SPEED_ADDR) — used whenever a request omits its own `addr` override.
+ * @param type Which sensor type's default address to look up.
+ * @return The stored address, or the built-in default if NVS has never been written.
+ */
 static uint8_t wind_default_addr(wind_sensor_type_t type)
 {
     return (type == WIND_SENSOR_DIRECTION)
@@ -292,8 +415,10 @@ static uint8_t wind_default_addr(wind_sensor_type_t type)
         : (uint8_t)cfg_get_u8(CFG_KEY_WIND_SPEED_ADDR, CFG_DEFAULT_WIND_SPEED_ADDR);
 }
 
+/** @brief Register the human-GUI wind-poll routes: POST /wind/start, POST /wind/stop, POST /wind/config/read, POST /wind/config/write. */
 static void register_wind_endpoints(void)
 {
+    // POST /wind/start — persist addr/interval to NVS and hand off to wind_poll_task; readings arrive via WebSocket (broadcast_wind_if_active()), not this response.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/wind/start", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         wind_sensor_type_t type = parse_wind_sensor_type(o["type"] | "speed");
@@ -309,11 +434,13 @@ static void register_wind_endpoints(void)
         send_ok(request, true);
     }));
 
+    // POST /wind/stop — suspend wind_poll_task's polling for whichever sensor type is currently active (the addr passed to wind_poll_set_active() is ignored when activating=false).
     s_server.on("/wind/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
         wind_poll_set_active(0, wind_poll_get_active_type(), false);
         send_ok(request, true);
     });
 
+    // POST /wind/config/read — read all 4 holding registers (calibration config) from a wind unit and report them as a JSON object.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/wind/config/read", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         wind_sensor_type_t type = parse_wind_sensor_type(o["type"] | "speed");
@@ -340,6 +467,7 @@ static void register_wind_endpoints(void)
         request->send(200, "application/json", buf);
     }));
 
+    // POST /wind/config/write — write a single named holding register (one of the 4 calibration fields) to a wind unit.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/wind/config/write", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         wind_sensor_type_t type = parse_wind_sensor_type(o["type"] | "speed");
@@ -363,8 +491,10 @@ static void register_wind_endpoints(void)
     }));
 }
 
+/** @brief Register the human-GUI ad hoc Register Explorer route: POST /explorer/query. One-off raw Modbus reads/writes for manual bench probing, distinct from both the scan/wind flows and /api/v1/modbus. */
 static void register_explorer_endpoint(void)
 {
+    // POST /explorer/query — build and send one arbitrary FC03/04/06/16 request (any slave/register/count the operator types in) and return the decoded result or an error status; the GUI's free-form register-probing tool.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/explorer/query", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         uint8_t addr   = o["addr"] | 1;
@@ -434,9 +564,19 @@ static void register_explorer_endpoint(void)
     }));
 }
 
-/** @brief design/api.md's machine-first API — currently just POST /api/v1/modbus (§4); GET /spec/status/log/wind and POST /scan follow. */
+/**
+ * @brief Register design/api.md's machine-first API: POST /api/v1/modbus (core transaction, §4), GET /api/v1/spec (§5.1), GET /api/v1/status (§5.2), GET+POST /api/v1/scan (§5.3), GET /api/v1/log (§5.4), GET /api/v1/wind (§5.5).
+ *
+ * Unlike register_scan_endpoints()/register_wind_endpoints()/
+ * register_explorer_endpoint() above, these routes use real HTTP status
+ * codes (400/409/500 as well as 200) and machine-readable `status` plus
+ * `detail`/`hint` prose on failure (§7) — built for a scripted or
+ * LLM-driven client, not the browser GUI. (§2 also documents 503 for
+ * "tester not ready", but that case isn't produced by any handler here.)
+ */
 static void register_api_v1_endpoints(void)
 {
+    // POST /api/v1/modbus — the core endpoint (§4): validate every field, build one Modbus request, run it through mb_queue_transact(), and translate the outcome into the §4.2/§4.3 JSON response shapes.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/api/v1/modbus", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
 
@@ -626,6 +766,7 @@ static void register_api_v1_endpoints(void)
         "{\"addr\":3,\"name\":\"low_speed_cutoff\",\"unit\":\"0.1 m/s\",\"range\":[0,50]}"
         "]}}";
 
+    // GET /api/v1/spec — self-description (§5.1): endpoint list, status vocabulary, and the DUT_REGISTER_SNAPSHOT_JSON below, so a client that only knows the base URL can bootstrap without human-provided docs.
     s_server.on("/api/v1/spec", HTTP_GET, [](AsyncWebServerRequest *request) {
         /* 2048 silently truncated (invalid JSON) once the TDS v0.6 register
          * snapshot grew from 5+2 short entries to 12 input + 4 holding
@@ -636,6 +777,7 @@ static void register_api_v1_endpoints(void)
         request->send(200, "application/json", buf);
     });
 
+    // GET /api/v1/status — tester and bus health snapshot (§5.2): firmware version, Wi-Fi, NTP sync, Modbus config/health counters, and whether a scan or wind poll is currently occupying the bus.
     s_server.on("/api/v1/status", HTTP_GET, [](AsyncWebServerRequest *request) {
         wifi_status_t wifi = wifi_manager_get_status();
         char buf[512];
@@ -653,6 +795,7 @@ static void register_api_v1_endpoints(void)
         request->send(200, "application/json", buf);
     });
 
+    // GET /api/v1/wind?type=speed|direction — cached reading for one sensor type (§5.5), sourced from wind_poll_task's cache rather than issuing a fresh bus read; "speed" is the default when the query param is omitted or unrecognised.
     s_server.on("/api/v1/wind", HTTP_GET, [](AsyncWebServerRequest *request) {
         wind_sensor_type_t type = WIND_SENSOR_SPEED;
         if (request->hasParam("type") && request->getParam("type")->value() == "direction") {
@@ -666,6 +809,7 @@ static void register_api_v1_endpoints(void)
         request->send(200, "application/json", buf);
     });
 
+    // GET /api/v1/log?n=20 — most recent n TX/RX traffic-log entries (§5.4, default 20, clamped to MB_LOG_CAPACITY), newest last, for post-hoc debugging of what actually went over the wire.
     s_server.on("/api/v1/log", HTTP_GET, [](AsyncWebServerRequest *request) {
         size_t n = 20;
         if (request->hasParam("n")) {
@@ -702,6 +846,7 @@ static void register_api_v1_endpoints(void)
         free(buf);
     });
 
+    // POST /api/v1/scan — start a bus sweep (§5.3), either blocking until it completes ("wait":true, the default) or returning 202 immediately for a client that will poll GET /api/v1/scan instead. Returns 409 if a scan is already running.
     /* AsyncCallbackJsonWebHandler defaults to matching GET|POST|PUT|PATCH on
      * its URI — since GET /api/v1/scan is a separate, differently-behaved
      * route registered below on the same path, this one must be pinned to
@@ -775,6 +920,7 @@ static void register_api_v1_endpoints(void)
     scan_post_handler->setMethod(HTTP_POST);
     s_server.addHandler(scan_post_handler);
 
+    // GET /api/v1/scan — poll current/completed scan state and results (§5.3); the counterpart to POST /api/v1/scan's non-blocking "wait":false style.
     s_server.on("/api/v1/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
         const size_t buf_size = 16384;
         char *buf = (char *)malloc(buf_size);
@@ -789,8 +935,10 @@ static void register_api_v1_endpoints(void)
     });
 }
 
+/** @brief Register the human-GUI settings routes: POST /config/wifi, POST /config/ntp, POST /config/time, POST /config/modbus, POST /log/clear. */
 static void register_settings_endpoints(void)
 {
+    // POST /config/wifi — persist new SSID/password to NVS and reboot immediately, since wifi_manager_task only reads credentials at boot; see the delay()/ESP.restart() comment below for why.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/config/wifi", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         const char *ssid = o["ssid"] | "";
@@ -811,6 +959,7 @@ static void register_settings_endpoints(void)
         ESP.restart();
     }));
 
+    // POST /config/ntp — persist the NTP server hostname to NVS; takes effect on ntp_task's next sync attempt, no reboot needed.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/config/ntp", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         const char *server_name = o["server"] | CFG_DEFAULT_NTP_SERVER;
@@ -818,6 +967,7 @@ static void register_settings_endpoints(void)
         send_ok(request, true);
     }));
 
+    // POST /config/time — manually set the system clock (for offline/no-NTP bench use); fields default to 2026-01-01T00:00:00 for any omitted.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/config/time", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         manual_time_t t;
@@ -830,6 +980,7 @@ static void register_settings_endpoints(void)
         send_ok(request, ntp_set_manual_time(&t));
     }));
 
+    // POST /config/modbus — persist the default Modbus response timeout/retry counts to NVS; these are the fallback values /api/v1/modbus's timeout_ms/retries override per-request.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/config/modbus", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         uint16_t timeout_ms = o["timeout_ms"] | CFG_DEFAULT_MB_TIMEOUT_MS;
@@ -839,6 +990,7 @@ static void register_settings_endpoints(void)
         send_ok(request, true);
     }));
 
+    // POST /log/clear — wipe the traffic log ring buffer and tell connected GUI clients to clear their table via a WebSocket type:"log_clear" push.
     s_server.on("/log/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
         mblog_clear();
         s_ws.textAll("{\"type\":\"log_clear\"}");

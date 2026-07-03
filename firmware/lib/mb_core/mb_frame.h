@@ -60,7 +60,10 @@ uint16_t mb_build_read_request(uint8_t *out, uint8_t addr, uint8_t fc,
 
 /**
  * @brief Build a FC06 (write single register) request frame.
- * @param out Destination buffer, at least 8 bytes.
+ * @param out   Destination buffer, at least 8 bytes.
+ * @param addr  Slave address (not validated here — caller's job).
+ * @param reg   Register address to write (raw, 0-based).
+ * @param value Value to write, host order.
  * @return Frame length in bytes (always 8).
  */
 uint16_t mb_build_write_single_request(uint8_t *out, uint8_t addr,
@@ -69,6 +72,8 @@ uint16_t mb_build_write_single_request(uint8_t *out, uint8_t addr,
 /**
  * @brief Build a FC16 (write multiple registers) request frame.
  * @param out    Destination buffer, at least 9 + count*2 bytes.
+ * @param addr   Slave address (not validated here — caller's job).
+ * @param start  Starting register address (raw, 0-based).
  * @param count  Number of registers (caller ensures <= MB_MAX_WRITE_REGISTERS).
  * @param values Register values, host order, count entries.
  * @return Frame length in bytes.
@@ -99,6 +104,19 @@ mb_frame_status_t mb_parse_read_response(const uint8_t *buf, uint16_t len,
 
 /**
  * @brief Parse a FC06 response frame (expected to echo the request exactly).
+ *
+ * Validates CRC, address echo, function code (including the exception
+ * variant 0x06|0x80), and that the echoed register/value match what was
+ * sent — a slave that returns a well-formed but different echo is treated
+ * as a framing error, not silently accepted.
+ *
+ * @param buf            Received frame bytes.
+ * @param len            Received frame length.
+ * @param expect_addr    Slave address the request was sent to.
+ * @param expect_reg     Register address that was written.
+ * @param expect_value   Value that was written, host order.
+ * @param exception_code Set when the return value is MB_FRAME_ERR_EXCEPTION.
+ * @return Parse result.
  */
 mb_frame_status_t mb_parse_write_single_response(const uint8_t *buf, uint16_t len,
                                                   uint8_t expect_addr,
@@ -108,6 +126,18 @@ mb_frame_status_t mb_parse_write_single_response(const uint8_t *buf, uint16_t le
 
 /**
  * @brief Parse a FC16 response frame (echoes address/start/count, not data).
+ *
+ * Per the Modbus spec, an FC16 response does not echo the written register
+ * values — only start address and count — so unlike
+ * mb_parse_write_single_response() there is no @p values to verify here.
+ *
+ * @param buf            Received frame bytes.
+ * @param len            Received frame length.
+ * @param expect_addr    Slave address the request was sent to.
+ * @param expect_start   Starting register address that was written.
+ * @param expect_count   Number of registers that were written.
+ * @param exception_code Set when the return value is MB_FRAME_ERR_EXCEPTION.
+ * @return Parse result.
  */
 mb_frame_status_t mb_parse_write_multiple_response(const uint8_t *buf, uint16_t len,
                                                     uint8_t expect_addr,

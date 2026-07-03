@@ -21,7 +21,10 @@
 /** @brief Duration of a "pulse" flash before reverting to the current base state. */
 #define LED_PULSE_MS 150u
 
-/** @brief Bind the backend to use. Sets the initial state to idle. */
+/**
+ * @brief Bind the backend to use. Sets the initial state to idle.
+ * @param backend Backend to drive; must outlive all led_* calls.
+ */
 void led_init(const led_backend_t *backend);
 
 /** @brief Steady blue — normal, waiting. */

@@ -37,6 +37,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - Direction sensor-fault sentinel (`65535` on `dir_instant`/`dir_avg`, per
   FR-S38 — a floating potentiometer wiper for >2 s) surfaced as a red
   "Sensor fault" badge on the Wind Direction tab.
+- Comprehensive Doxygen documentation across all of `firmware/lib/` and
+  `firmware/src/` (comments only, no behavioural change) — every public
+  header declaration, struct/enum member, `#define` constant, and internal
+  `static` helper now has a complete `@brief`/`@param`/`@return`. A new
+  root-level `Doxyfile` (output to `docs/doxygen/`, gitignored) builds it
+  with `WARN_IF_UNDOCUMENTED`/`WARN_NO_PARAMDOC` enabled as the completeness
+  gate — the tree now builds with zero Doxygen warnings.
 
 ### Removed
 
@@ -52,6 +59,10 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   the DUT register snapshot grew to describe the full 12+4-register map —
   caught via a real `ConvertFrom-Json` parse failure on hardware at byte
   2047. Bumped to `char buf[4096]`.
+- Two pre-existing comments contained a literal `/*` (`main.cpp`'s
+  "`lib/*`") or an unescaped `@file` mention in prose, which Doxygen's
+  parser misreads as a nested comment opener / a broken `\file` command —
+  found while building the Doxygen pass above, reworded to plain text.
 
 ---
 

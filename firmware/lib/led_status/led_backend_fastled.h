@@ -10,7 +10,7 @@
 
 #include "led_backend.h"
 
-#define LED_GPIO_PIN 35
+#define LED_GPIO_PIN 35 /**< Confirmed-working data pin for the on-board WS2812B (see memory/gotcha-log.md). */
 
 /**
  * @brief Initialise FastLED on GPIO35 and return a backend bound to it.

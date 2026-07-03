@@ -2,7 +2,7 @@
  * @file main.cpp
  * @brief Windmeters Modbus Interface Tester — application entry point.
  *
- * Every library here (lib/*) is independently unit-tested under
+ * Every library under lib/ is independently unit-tested under
  * `pio test -e native` and has been individually verified on real
  * hardware — see design/completeRealisationPlan.md for what each task
  * covers and memory/gotcha-log.md for how each was checked. This file is
@@ -33,6 +33,16 @@
 #include "wind_poll_task.h"
 #include "web_server_task.h"
 
+/**
+ * @brief Arduino entry point: bring up every library and start every task.
+ *
+ * Order matters only where a task depends on another's init having run
+ * first (cfg before anything that reads a stored setting; mb_master_init()
+ * before modbus_master_task_start(), since the task owns the queue
+ * mb_master.h expects to already exist). Task start order among
+ * independent tasks is otherwise arbitrary — FreeRTOS scheduling, not this
+ * function, decides what runs when.
+ */
 void setup()
 {
     Serial.begin(115200);
@@ -58,6 +68,13 @@ void setup()
     Serial.println("Ready — open the web UI (AP: http://192.168.4.1, or STA/mDNS once connected).");
 }
 
+/**
+ * @brief Arduino's own idle loop — deliberately empty.
+ *
+ * All real work happens in the FreeRTOS tasks setup() started; the
+ * Arduino core's hidden loopTask that calls this still needs a loop()
+ * symbol to link, but it has nothing to do here.
+ */
 void loop()
 {
     /* Everything runs in FreeRTOS tasks started above. */

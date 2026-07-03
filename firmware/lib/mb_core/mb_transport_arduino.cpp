@@ -1,13 +1,49 @@
+/**
+ * @file mb_transport_arduino.cpp
+ * @brief Real mb_transport_t backed by Serial2 — implementation.
+ *
+ * Entirely gated behind `#ifdef ARDUINO`: this file compiles to nothing in
+ * the native test env (see mb_frame.h's file-level doc comment), since there is no
+ * Serial2 there and the native tests use a fake transport instead. There is
+ * no non-Arduino stub branch here — the whole translation unit is a no-op
+ * outside the Arduino build.
+ *
+ * Single static mb_transport_t instance (s_arduino_transport) — matches
+ * mb_core's singleton assumption (see mb_transport.h) that exactly one
+ * transport is active for the process lifetime.
+ */
 #ifdef ARDUINO
 #include "mb_transport_arduino.h"
 #include <Arduino.h>
 
+/**
+ * @brief mb_transport_t::write implementation: blocking Serial2 send.
+ *
+ * Satisfies the write() contract in mb_transport.h — blocks until fully
+ * transmitted via Serial2.flush(), so the matching read() that mb_core
+ * issues right after is guaranteed to start after the last TX bit is on
+ * the wire.
+ *
+ * @param buf Request frame bytes to send.
+ * @param len Number of bytes in @p buf to send.
+ */
 static void arduino_write(void * /*ctx*/, const uint8_t *buf, uint16_t len)
 {
     Serial2.write(buf, len);
     Serial2.flush();
 }
 
+/**
+ * @brief mb_transport_t::read implementation: Serial2 read with an
+ *        inter-byte timeout standing in for "end of frame".
+ *
+ * @param buf        Destination buffer for the response frame.
+ * @param max_len    Capacity of @p buf in bytes.
+ * @param timeout_ms Per-byte inter-byte timeout; a gap longer than this
+ *                    ends the read.
+ * @return Number of bytes actually read into @p buf (0 on a full timeout
+ *         with nothing received).
+ */
 static uint16_t arduino_read(void * /*ctx*/, uint8_t *buf, uint16_t max_len, uint16_t timeout_ms)
 {
     /* Stream::readBytes() waits up to setTimeout() for each byte and stops
@@ -18,6 +54,7 @@ static uint16_t arduino_read(void * /*ctx*/, uint8_t *buf, uint16_t max_len, uin
     return (uint16_t)Serial2.readBytes((char *)buf, max_len);
 }
 
+/** @brief The one live mb_transport_t instance, wired to the arduino_write()/arduino_read() pair above. */
 static mb_transport_t s_arduino_transport = { arduino_write, arduino_read, 0 };
 
 const mb_transport_t *mb_transport_arduino_init(uint32_t baud)

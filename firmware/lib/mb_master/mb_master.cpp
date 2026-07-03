@@ -1,3 +1,17 @@
+/**
+ * @file mb_master.cpp
+ * @brief mb_master_process() — dispatch one request to mb_core, log it, drive the LED, tally health.
+ *
+ * The one non-obvious contract this file enforces: a request is only
+ * considered to have "touched the wire" if its fc was one mb_core actually
+ * dispatched (see `dispatched` in mb_master_process()). An unrecognised fc
+ * is rejected as MB_ERR_PARAM without calling into mb_core at all, so the
+ * mb_get_last_tx/_rx/_attempts() single-scratch-value accessors would still
+ * hold whatever a *previous, unrelated* call left behind — reading them
+ * anyway would silently mislabel that leftover data as belonging to this
+ * request. `dispatched` gates those reads so a rejected request is logged
+ * (and returned) with zero-length raw frames instead.
+ */
 #include "mb_master.h"
 #include "mb_frame.h" /* MB_MAX_FRAME_LEN */
 #include "mb_log.h"
@@ -5,7 +19,7 @@
 #include <string.h>
 #include <stdio.h>
 
-static mb_bus_health_t s_health;
+static mb_bus_health_t s_health; /**< The single running health-counter instance; see mb_master_get_health(). */
 
 void mb_master_init(void)
 {
@@ -17,6 +31,11 @@ const mb_bus_health_t *mb_master_get_health(void)
     return &s_health;
 }
 
+/**
+ * @brief Short uppercase tag for a status, used in the one-line log summary (e.g. "TIMEOUT").
+ * @param status Status to name.
+ * @return Static string literal; never NULL, unrecognised values fall back to "?".
+ */
 static const char *status_name(mb_status_t status)
 {
     switch (status) {
@@ -30,6 +49,22 @@ static const char *status_name(mb_status_t status)
     }
 }
 
+/**
+ * @brief Build one mb_log_entry_t from a raw frame and append it via mblog_append().
+ *
+ * Silently does nothing for a zero-length frame (see the raw_len == 0 check
+ * below) — a PARAM-rejected request or a timed-out response never touched
+ * the wire, so there's nothing worth logging, and calling this
+ * unconditionally would append a bogus zero-byte entry for every rejection.
+ *
+ * @param is_tx        true logs this as the outbound request, false as the
+ *                      inbound response — mirrors mb_log_entry_t::is_tx.
+ * @param raw          Frame bytes; truncated to fit entry.raw if longer.
+ * @param raw_len      Number of valid bytes in @p raw; 0 is a no-op (see above).
+ * @param summary      One-line decoded summary shared by both the TX and RX
+ *                      entries for this transaction (same string, appended twice).
+ * @param timestamp_ms Stamped into the entry verbatim; see mb_master_process().
+ */
 static void log_frame(bool is_tx, const uint8_t *raw, uint16_t raw_len,
                        const char *summary, uint32_t timestamp_ms)
 {

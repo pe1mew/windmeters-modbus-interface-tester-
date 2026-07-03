@@ -1,3 +1,15 @@
+/**
+ * @file wifi_manager_task.cpp
+ * @brief FreeRTOS/Arduino orchestration around the wifi_manager decision
+ *        core — implementation (TASK-WIFI, design/completeRealisationPlan.md).
+ *
+ * See wifi_manager_task.h for the thin-wrapper design rationale and
+ * wifi_manager.h for why the AP starts unconditionally. This file owns the
+ * one-shot state machine: AP up -> optionally attempt STA -> optionally
+ * tear the AP down, all driven by the pure decisions in wifi_manager.cpp.
+ * No periodic reconnect-on-drop yet (see the task loop below) — that's
+ * intentionally out of scope for this pass.
+ */
 #ifdef ARDUINO
 #include "wifi_manager_task.h"
 #include "wifi_manager.h"
@@ -9,11 +21,17 @@
 #include <string.h>
 #include <stdio.h>
 
-#define STA_CONNECT_TIMEOUT_MS 15000u
-#define MDNS_HOSTNAME           "windmeter-tester"
+#define STA_CONNECT_TIMEOUT_MS 15000u          /**< How long to wait for WiFi.begin() to reach WL_CONNECTED before falling back to AP-only. */
+#define MDNS_HOSTNAME           "windmeter-tester" /**< Advertised as windmeter-tester.local once STA connects. */
 
-static wifi_status_t s_status;
+static wifi_status_t s_status; /**< Current snapshot returned by wifi_manager_get_status(). */
 
+/**
+ * @brief Bring up the AP radio with the MAC-derived SSID and record it in
+ *        s_status. Always open (no password) — matches the template's
+ *        convention, since the AP's job is to guarantee reachability, not
+ *        to be secured.
+ */
 static void start_ap(void)
 {
     uint8_t mac[6];
@@ -27,6 +45,30 @@ static void start_ap(void)
     s_status.ap_active = true;
 }
 
+/**
+ * @brief One-shot connectivity state machine, then an idle loop forever.
+ *
+ * Sequence (order matters — this is the actual TASK-WIFI behaviour, not
+ * just an implementation detail):
+ *   1. AP goes up unconditionally, before stored credentials are even
+ *      read — see wifi_manager.h's header comment for why this ordering
+ *      is load-bearing (the AP must already be reachable for the whole
+ *      window where an STA attempt might still be in flight or fail).
+ *   2. wifi_manager_should_attempt_sta() decides whether stored_ssid is
+ *      worth trying at all. If not, the function falls straight through
+ *      to the idle loop and stays in plain AP mode forever.
+ *   3. If an attempt is made, this busy-polls WiFi.status() for up to
+ *      STA_CONNECT_TIMEOUT_MS. There is no distinction between "bad
+ *      password", "AP out of range", and "still negotiating" — all of
+ *      them just read as "not connected by the deadline".
+ *   4. wifi_manager_should_keep_ap_after_connect() makes the final call:
+ *      on success the AP is torn down and mDNS is registered; on failure
+ *      the AP is left up (mode_str reverts to plain "AP") so the device
+ *      stays reachable, per TASK-WIFI's "never unreachable" requirement.
+ *
+ * Runs for the lifetime of the task — steps 1-4 execute once, then the
+ * function parks in a slow poll loop (no reconnect-on-drop in this pass).
+ */
 static void wifi_manager_task_fn(void * /*pvParameters*/)
 {
     char stored_ssid[33] = {0};

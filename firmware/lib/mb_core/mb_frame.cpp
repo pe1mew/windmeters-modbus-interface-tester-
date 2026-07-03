@@ -1,3 +1,13 @@
+/**
+ * @file mb_frame.cpp
+ * @brief Modbus RTU frame-level logic — implementation (MB-1,
+ *        design/realisationPlan.md §2).
+ *
+ * Pure functions only — no static/global state, safe to call from any
+ * context (unlike mb_core.cpp, which is a stateful singleton). This is what
+ * lets it run unmodified in both the Arduino firmware build and the native
+ * host test env.
+ */
 #include "mb_frame.h"
 
 uint16_t mb_crc16(const uint8_t *buf, uint16_t len)
@@ -16,7 +26,11 @@ uint16_t mb_crc16(const uint8_t *buf, uint16_t len)
     return crc;
 }
 
-/** @brief Append the CRC16 of the first @p len bytes of @p buf, low byte first. */
+/**
+ * @brief Append the CRC16 of the first @p len bytes of @p buf, low byte first.
+ * @param buf Frame buffer; must have room for 2 more bytes past @p len.
+ * @param len Number of bytes to checksum, before the CRC is appended.
+ */
 static void append_crc(uint8_t *buf, uint16_t len)
 {
     uint16_t crc = mb_crc16(buf, len);
@@ -24,7 +38,12 @@ static void append_crc(uint8_t *buf, uint16_t len)
     buf[len + 1] = (uint8_t)(crc >> 8);
 }
 
-/** @brief Verify the trailing 2 CRC bytes of a received frame of length @p len. */
+/**
+ * @brief Verify the trailing 2 CRC bytes of a received frame of length @p len.
+ * @param buf Frame buffer, including its trailing 2 CRC bytes.
+ * @param len Total frame length in bytes, CRC bytes included.
+ * @return true if the trailing CRC matches the computed CRC16 of the rest.
+ */
 static bool crc_ok(const uint8_t *buf, uint16_t len)
 {
     if (len < 2) {

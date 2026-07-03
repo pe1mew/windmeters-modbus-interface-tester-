@@ -1,9 +1,20 @@
+/**
+ * @file mb_log.cpp
+ * @brief Ring buffer implementation backing mb_log.h.
+ *
+ * Storage is heap-allocated (malloc/free) rather than a fixed static array
+ * so mblog_init() can be called again to resize at runtime without a
+ * reboot. s_head + s_count track a classic circular buffer: s_head is the
+ * oldest entry's index, and (s_head + s_count) % s_capacity is always the
+ * next write slot — see mblog_append() for how those two are kept in sync
+ * as the buffer fills and then wraps.
+ */
 #include "mb_log.h"
 #include <string.h>
 #include <stdlib.h>
 
-static mb_log_entry_t *s_buf      = 0;
-static size_t           s_capacity = 0;
+static mb_log_entry_t *s_buf      = 0; /**< Heap-allocated ring buffer, sized by the most recent mblog_init(). */
+static size_t           s_capacity = 0; /**< Entries s_buf can hold; the capacity passed to mblog_init(). */
 static size_t           s_head     = 0; /**< Index of the oldest entry. */
 static size_t           s_count    = 0; /**< Number of valid entries. */
 static uint32_t         s_total_appended = 0; /**< Ever-growing; see mblog_total_appended(). */

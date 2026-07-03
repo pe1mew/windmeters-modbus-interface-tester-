@@ -21,7 +21,11 @@
  */
 void scan_task_start(void);
 
-/** @brief Ask the task to begin a sweep from @p range_start to @p range_end. Non-blocking. */
+/**
+ * @brief Ask the task to begin a sweep from @p range_start to @p range_end. Non-blocking.
+ * @param range_start First address to probe.
+ * @param range_end   Last address to probe (inclusive).
+ */
 void scan_task_request_start(uint8_t range_start, uint8_t range_end);
 
 /** @brief Ask the task to stop an in-progress sweep. Non-blocking, no-op if idle. */

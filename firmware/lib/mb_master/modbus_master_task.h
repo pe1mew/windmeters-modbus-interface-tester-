@@ -20,8 +20,12 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
+/**
+ * @brief One queued unit of work for modbus_master_task: a request, where to
+ *        reply, and optional per-transaction timing overrides.
+ */
 typedef struct {
-    mb_request_t  request;
+    mb_request_t  request;  /**< The Modbus request to run; forwarded to mb_master_process() as-is. */
     /** Caller-owned queue (capacity >= 1, holds one mb_result_t) the task posts the result to. */
     QueueHandle_t reply_to;
     /**
@@ -34,8 +38,8 @@ typedef struct {
      * struct to zero, so this defaults to off for all of them.
      */
     bool          override_timing;
-    uint16_t      timeout_override_ms;
-    uint8_t       retries_override;
+    uint16_t      timeout_override_ms; /**< Used instead of NVS mb_timeout_ms when override_timing is true; ignored otherwise. */
+    uint8_t       retries_override;    /**< Used instead of NVS mb_retries when override_timing is true; ignored otherwise. */
 } mb_task_request_t;
 
 /**
@@ -47,7 +51,10 @@ typedef struct {
  */
 void modbus_master_task_start(void);
 
-/** @brief Queue to xQueueSend() an mb_task_request_t to. NULL until modbus_master_task_start() runs. */
+/**
+ * @brief Queue to xQueueSend() an mb_task_request_t to.
+ * @return The queue handle, or NULL until modbus_master_task_start() runs.
+ */
 QueueHandle_t modbus_master_get_queue(void);
 
 #endif /* ARDUINO */

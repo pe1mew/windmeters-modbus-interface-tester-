@@ -21,6 +21,9 @@
 
 #include <stdint.h>
 
+/**
+ * @brief A calendar timestamp for the manual-set-time fallback path (UTC).
+ */
 typedef struct {
     uint16_t year;   /**< e.g. 2026. */
     uint8_t  month;  /**< 1-12. */
@@ -34,11 +37,18 @@ typedef struct {
  * @brief Should a sync attempt be made right now?
  *
  * v1 scope is "sync once, when STA first comes up" — no periodic resync.
+ * @param sta_connected Current wifi_status_t.sta_connected from wifi_manager.
+ * @param already_synced Current ntp_manager_is_synced() value.
+ * @return true only when connected and not yet synced; false in every other
+ *         combination, including "connected but already synced" — by
+ *         design there is no periodic resync in v1.
  */
 bool ntp_manager_should_sync(bool sta_connected, bool already_synced);
 
 /**
  * @brief Validate a manually-entered date/time (web UI fallback path).
+ * @param t Candidate value. Must not be NULL (not checked — caller's
+ *          responsibility, same as the rest of this header's pointer args).
  * @return true if every field is in range for its month/leap year.
  */
 bool ntp_manager_validate_manual_time(const manual_time_t *t);
@@ -50,15 +60,22 @@ bool ntp_manager_validate_manual_time(const manual_time_t *t);
  * Only one reference point is kept — a later call overwrites it. Good
  * enough for a millis()-since-boot converter; not intended to correct for
  * clock drift over long uptimes.
+ * @param millis_at_sync millis()-since-boot at the moment of sync.
+ * @param epoch_at_sync  Wall-clock time at that same moment, Unix seconds (UTC).
  */
 void ntp_manager_record_sync(uint32_t millis_at_sync, uint32_t epoch_at_sync);
 
-/** @brief Whether ntp_manager_record_sync() has ever been called. */
+/**
+ * @brief Whether ntp_manager_record_sync() has ever been called.
+ * @return true once at least one sync has been recorded; never resets to
+ *         false on its own (only ntp_manager_reset() clears it).
+ */
 bool ntp_manager_is_synced(void);
 
 /**
  * @brief Convert a millis()-since-boot value (e.g. from an mb_log_entry_t)
  *        into Unix epoch seconds, using the recorded sync reference point.
+ * @param millis_value millis()-since-boot timestamp to convert.
  * @return Epoch seconds, or 0 if never synced.
  */
 uint32_t ntp_manager_millis_to_epoch(uint32_t millis_value);

@@ -1,3 +1,9 @@
+/**
+ * @file wind_poll.cpp
+ * @brief Wind Test decode/config core — implementation. See wind_poll.h
+ * for the public API contract and the TDS §2.7/§2.8 register map this
+ * file encodes/decodes against.
+ */
 #include "wind_poll.h"
 
 #define WIND_FAULT_RAW 65535u /**< TDS FR-S38 sensor-fault sentinel. */

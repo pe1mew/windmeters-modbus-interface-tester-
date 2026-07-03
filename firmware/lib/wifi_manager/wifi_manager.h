@@ -25,6 +25,8 @@
 /**
  * @brief Is a stored SSID worth attempting an STA connection with?
  * @param stored_ssid wifi_ssid from NVS ("" or NULL if never configured).
+ * @return true if @p stored_ssid is non-NULL and non-empty (an STA attempt
+ *         is worth making); false otherwise.
  */
 bool wifi_manager_should_attempt_sta(const char *stored_ssid);
 
@@ -39,5 +41,12 @@ bool wifi_manager_should_keep_ap_after_connect(bool sta_connected);
 /**
  * @brief Format the AP SSID: "WindmeterTester-XXYY", XX/YY = last two MAC
  *        bytes as uppercase hex — matches the template's SensorEmulator-AABB.
+ * @param out        Destination buffer. Caller-owned; always null-terminated
+ *                    within @p out_size (snprintf() semantics — truncated,
+ *                    not overflowed, if too small).
+ * @param out_size    Capacity of @p out; 22 bytes covers the longest possible
+ *                    result ("WindmeterTester-XXYY" + NUL).
+ * @param mac_byte4   Second-to-last byte of the station MAC address.
+ * @param mac_byte5   Last byte of the station MAC address.
  */
 void wifi_manager_format_ap_ssid(char *out, size_t out_size, uint8_t mac_byte4, uint8_t mac_byte5);

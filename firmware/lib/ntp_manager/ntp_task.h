@@ -22,10 +22,21 @@
  */
 void ntp_task_start(void);
 
+/**
+ * @brief Thin wrapper over ntp_manager_is_synced() — see there for meaning.
+ * @return true once a sync (real NTP or manual) has landed.
+ */
 bool ntp_is_synced(void);
 
 /**
  * @brief Apply a manually-entered date/time (web UI fallback path).
+ *
+ * Validates via ntp_manager_validate_manual_time(), then — only if
+ * valid — calls settimeofday() and records the new reference point via
+ * ntp_manager_record_sync(), same as a real NTP sync landing. No TZ is
+ * configured anywhere in this project, so @p t is treated as UTC in,
+ * UTC out.
+ * @param t Candidate value; not modified. Must not be NULL.
  * @return false if @p t fails validation — nothing is applied in that case.
  */
 bool ntp_set_manual_time(const manual_time_t *t);
