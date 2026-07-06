@@ -110,9 +110,23 @@ mb_result_t mb_master_process(const mb_request_t *req, uint32_t timestamp_ms)
         result.exception_code = mb_last_exception_code();
     }
 
+    /* Stale RX bytes mb_core discarded before transmitting this request
+     * (overheard third-party traffic on a shared RS-485 bus). 0 for a
+     * request that never reached the wire — same `dispatched` gate as the
+     * tx/rx reads below, and for the same reason (mb_get_last_discarded()
+     * is a single scratch value that a prior call would otherwise leak). */
+    uint16_t discarded = dispatched ? mb_get_last_discarded() : 0;
+
     char summary[64];
-    snprintf(summary, sizeof(summary), "FC%02X addr%u start0x%04X cnt%u -> %s",
-              req->fc, req->addr, req->start, req->count, status_name(result.status));
+    int summary_len = snprintf(summary, sizeof(summary), "FC%02X addr%u start0x%04X cnt%u -> %s",
+                                req->fc, req->addr, req->start, req->count, status_name(result.status));
+    /* Append the flush diagnostic only when something was actually discarded,
+     * so a clean bus logs the exact same summary it always has. Guarded on
+     * the base summary having fit, so we never write past summary[]. */
+    if (discarded > 0 && summary_len > 0 && (size_t)summary_len < sizeof(summary)) {
+        snprintf(summary + summary_len, sizeof(summary) - (size_t)summary_len,
+                  " [flushed %u]", discarded);
+    }
 
     /* Only ask mb_core for its last tx/rx when this request actually
      * reached it — otherwise mb_get_last_tx/rx() would return whatever a

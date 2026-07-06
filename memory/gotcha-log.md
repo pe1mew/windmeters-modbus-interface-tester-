@@ -66,6 +66,32 @@ reply correctly parsed as `found`. If this class of symptom ever
 reappears, suspect a *different* stray-byte source (not this one — it's
 closed) before re-opening this entry.
 
+**On a shared RS-485 bus, overheard third-party traffic corrupts the *next*
+own transaction — flush the RX buffer before every TX, not just at boot.**
+The boot-flush above (`mb_transport_arduino_init()`) only clears the
+one-time power-on glitch byte; it does nothing about bytes that arrive
+*during* operation. When another master is active on the same bus (bench
+2026-07-06: an ADALM2000 raw master exercising the DUT while the tester sat
+idle between its own polls), the tester's UART silently accumulates every
+frame it overhears. Its next own transaction then reads that whole backlog
+ahead of the real response — the traffic log showed one RX entry holding
+~30 overheard frames followed by the actual valid reply — and parses the
+stale head as a misaligned oversized frame → `CRC_ERR`. The tell is the
+*pattern*: one transaction fails, the next succeeds, repeating — because
+the failed read drains the buffer, leaving the following read clean, until
+enough new traffic piles up again. Fixed in `mb_core.cpp`'s
+`do_transaction()` (not the transport init): it now drains the RX buffer
+immediately before *each* write attempt, via a new optional
+`mb_transport_t::flush` callback (`arduino_flush()` on hardware, a staged-
+byte mock in the native tests). Flushed per attempt, not once before the
+retry loop, because a retry after a timeout can re-accumulate junk in the
+gap between that timeout and the re-send. The discarded-byte count is kept
+as `mb_get_last_discarded()` and shown as `[flushed N]` on the log summary,
+so a noisy bus is visible rather than silently costing a retry. This is the
+"different stray-byte source" the boot-flush entry above told you to look
+for — distinct root cause (runtime bus contention vs. a power-on peripheral
+glitch), same misaligned-read → CRC symptom.
+
 ## Firmware — NVS / `cfg` key names
 
 **A `cfg_keys.h` key over Preferences' 15-character limit doesn't error —

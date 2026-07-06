@@ -4,8 +4,8 @@
 |--------------|-------------------------------------------|
 | Document     | Progress Snapshot                         |
 | Project      | Windmeters Modbus Interface Tester        |
-| Date         | 2026-07-02 (updated again — wind register map reconciled against the DUT's TDS v0.6, §11) |
-| Status       | **Tagged v0.4.2** (`changelog.md`) — Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) eight-of-nine done (`whatsNext.md` §3); wind speed/direction split + GUI restructure done (§10 below). Firmware reports its own version (`fw_version`, WS status + `GET /api/v1/status` + web UI footer). v0.4.1: removed a dead NVS key + a dead function found by a full dead-code audit, closed a real gap where `GET /api/v1/log` never actually used real timestamps even when NTP was synced. v0.4.2: root-caused and fixed the first-transaction-after-boot CRC error (`mb_transport_arduino_init()` now flushes a bench-confirmed stray RX byte instead of leaving it to corrupt the first real read) — closes a `memory/gotcha-log.md` entry that had sat unconfirmed for months. Since v0.4.2 (not yet its own tag): the DUT's TDS matured to v0.6 (FR-MB27) with a materially different register model than the tester assumed — §11 documents the reconciliation across code, tests, GUI, and docs. |
+| Date         | 2026-07-06 (shared-bus stale-RX flush before every TX, §12; prior: wind register map reconciled against the DUT's TDS v0.6, §11) |
+| Status       | **Tagged v0.4.2** (`changelog.md`) — Phase 1 (Libraries) + Phase 2 (FreeRTOS Tasks) + Phase 2.5 (Machine API) complete; Phase 3 (Integration Test) eight-of-nine done (`whatsNext.md` §3); wind speed/direction split + GUI restructure done (§10 below). Firmware reports its own version (`fw_version`, WS status + `GET /api/v1/status` + web UI footer). v0.4.1: removed a dead NVS key + a dead function found by a full dead-code audit, closed a real gap where `GET /api/v1/log` never actually used real timestamps even when NTP was synced. v0.4.2: root-caused and fixed the first-transaction-after-boot CRC error (`mb_transport_arduino_init()` now flushes a bench-confirmed stray RX byte instead of leaving it to corrupt the first real read) — closes a `memory/gotcha-log.md` entry that had sat unconfirmed for months. Since v0.4.2 (not yet its own tag): the DUT's TDS matured to v0.6 (FR-MB27) with a materially different register model than the tester assumed — §11 documents the reconciliation across code, tests, GUI, and docs; and §12 adds a shared-bus stale-RX flush before every TX (`do_transaction()` now drains overheard third-party traffic so it can't be misread as the response), found on the bench 2026-07-06. |
 | Related docs | `design/completeRealisationPlan.md` (Parts A/B this reports against), `design/realisationPlan.md` (MB-1/MB-2 detail), `design/scratchbook.md` (design source of truth), `design/whatsNext.md` (what follows this) |
 
 ---
@@ -18,11 +18,12 @@ hardware. Part C — Integration Test (INT-01…INT-09) is eight-of-nine done
 against a real FG6485A bus peer; only INT-05 (real-DUT wind decode) remains,
 blocked on the DUT's own firmware. See `whatsNext.md`.
 
-**143/143 native unit tests pass** (`pio test -e native`, ~6s, reconfirmed
-today) — up from 142 after §11's `test_wind_poll` rewrite against the DUT's
-TDS v0.6 register model (17 cases, up from the pre-reconciliation count),
-which itself followed Phase 2.5's tests plus the wind speed/direction split
-and log-broadcast fix (§10).
+**149/149 native unit tests pass** (`pio test -e native`, ~13s, reconfirmed
+2026-07-06) — up from 143 after §12's shared-bus RX-flush fix added 6 cases
+(4 in `test_mb_core`, 2 in `test_mb_master`), which followed §11's
+`test_wind_poll` rewrite against the DUT's TDS v0.6 register model (17 cases,
+up from the pre-reconciliation count), itself after Phase 2.5's tests plus
+the wind speed/direction split and log-broadcast fix (§10).
 Everything through the Phase 3 integration-test fixes is committed
 (`5affff4`); §10's log-broadcast fix, §11's TDS v0.6 reconciliation, and
 this documentation pass are staged, not yet committed — see §8.
@@ -313,6 +314,37 @@ old per-type layout.
 - **143/143 native tests pass.** No version bump yet — this is a
   correctness fix to match the DUT's spec, not new tester capability, so it
   would land as a patch (0.4.2 → 0.4.3) if/when tagged; not yet requested.
+
+---
+
+## 12. Shared-bus stale-RX flush before every TX (2026-07-06)
+
+Bench-found on a shared RS-485 bus: with a third-party master (an ADALM2000
+raw master) exercising the DUT while the tester idled between its own polls,
+the tester's next transaction reported `CRC_ERR`, then the one after
+succeeded, repeating. Root cause: `mb_core` never flushed the UART RX buffer
+before transmitting, so everything the tester overheard while idle piled up
+and was read *ahead* of the real response (the traffic log showed one RX
+entry of ~30 overheard frames then the valid reply), parsed as a misaligned
+oversized frame. The failed read incidentally drains the buffer, so the
+following transaction is clean — hence the every-other-one pattern.
+
+- **Fix in the transact path**: `do_transaction()` now drains the RX buffer
+  immediately before *each* write attempt, via a new optional
+  `mb_transport_t::flush` callback (`arduino_flush()` drains `Serial2` on
+  hardware; the native mock stages/drains simulated stale bytes). Per
+  attempt, not once before the retry loop — a retry can re-accumulate junk
+  between the prior timeout and the re-send. Distinct from the v0.4.2
+  boot-time flush, which only clears the one-time power-on glitch byte and
+  does nothing for runtime bus traffic (`memory/gotcha-log.md`).
+- **Diagnostic**: discarded-byte count kept as `mb_get_last_discarded()` and
+  surfaced as a `[flushed N]` suffix on the traffic-log summary (only when
+  N > 0, so a clean bus logs exactly as before), making a noisy bus visible.
+- **6 new native tests** (flush runs before write, once per attempt, count
+  surfaced, zeroed after PARAM rejection; summary annotation present when
+  noisy / absent when clean). **149/149 native tests pass**, and the
+  `windmeterTester` firmware builds clean. No version bump requested; would
+  land as a patch alongside §11 if/when tagged.
 
 ---
 

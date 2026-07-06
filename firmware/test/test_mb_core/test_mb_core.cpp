@@ -462,6 +462,83 @@ void test_attempts_zero_after_param_rejection(void)
     TEST_ASSERT_EQUAL_UINT8(0, mb_get_last_attempts());
 }
 
+/* =========================================================================
+ * Pre-TX RX flush (shared-bus stale-traffic guard)
+ * ========================================================================= */
+
+void test_flush_runs_before_write_and_reports_discarded_bytes(void)
+{
+    /* 30 bytes of another master's traffic are sitting in the RX buffer when
+     * we go to transmit — the exact shared-bus scenario from the bench. */
+    mock_transport_stage_stale_bytes(30);
+
+    const uint16_t vals[2] = {0x00AA, 0x00BB};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 1, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+
+    uint16_t out[2] = {0};
+    mb_status_t status = mb_read_holding_registers(1, 0, 2, out);
+
+    /* The transaction still succeeds — the stale bytes were dropped, not read
+     * ahead of the real response. */
+    TEST_ASSERT_EQUAL_INT(MB_OK, status);
+    TEST_ASSERT_EQUAL_HEX16(0x00AA, out[0]);
+    /* Flush happened, before the write, and its count was reported. */
+    TEST_ASSERT_EQUAL_INT(0, mock_transport_write_saw_unflushed_stale());
+    TEST_ASSERT_EQUAL_INT(1, mock_transport_get_flush_count());
+    TEST_ASSERT_EQUAL_UINT16(30, mb_get_last_discarded());
+}
+
+void test_clean_bus_reports_zero_discarded(void)
+{
+    /* Nothing staged: a clean bus discards nothing but still flushes once. */
+    const uint16_t vals[2] = {0x00AA, 0x00BB};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 1, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+
+    uint16_t out[2] = {0};
+    mb_read_holding_registers(1, 0, 2, out);
+
+    TEST_ASSERT_EQUAL_UINT16(0, mb_get_last_discarded());
+    TEST_ASSERT_EQUAL_INT(1, mock_transport_get_flush_count());
+}
+
+void test_flush_runs_once_per_write_attempt(void)
+{
+    /* One retry, first attempt times out — both attempts must flush before
+     * their write, since junk can re-accumulate between the two. */
+    mb_init(&mock_transport, 200, 1);
+    mock_transport_queue_timeout();
+
+    const uint16_t vals[2] = {0x00AA, 0x00BB};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 1, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+
+    uint16_t out[2] = {0};
+    mb_status_t status = mb_read_holding_registers(1, 0, 2, out);
+
+    TEST_ASSERT_EQUAL_INT(MB_OK, status);
+    TEST_ASSERT_EQUAL_INT(2, mock_transport_get_write_count());
+    TEST_ASSERT_EQUAL_INT(2, mock_transport_get_flush_count()); /* one flush per attempt */
+}
+
+void test_discarded_is_zero_after_param_rejection(void)
+{
+    /* Stale bytes are staged, but a PARAM-rejected call never reaches the
+     * transport — it must neither flush nor report a discard count. */
+    mock_transport_stage_stale_bytes(12);
+
+    uint16_t out[2] = {0};
+    mb_status_t status = mb_read_holding_registers(0 /* broadcast, rejected */, 0, 2, out);
+
+    TEST_ASSERT_EQUAL_INT(MB_ERR_PARAM, status);
+    TEST_ASSERT_EQUAL_UINT16(0, mb_get_last_discarded());
+    TEST_ASSERT_EQUAL_INT(0, mock_transport_get_flush_count());
+}
+
 /* ---------------------------------------------------------------------------
  * Entry point
  * --------------------------------------------------------------------------- */
@@ -493,6 +570,10 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_attempts_reflects_one_retry_consumed);
     RUN_TEST(test_attempts_after_retries_exhausted_equals_retries_plus_one);
     RUN_TEST(test_attempts_zero_after_param_rejection);
+    RUN_TEST(test_flush_runs_before_write_and_reports_discarded_bytes);
+    RUN_TEST(test_clean_bus_reports_zero_discarded);
+    RUN_TEST(test_flush_runs_once_per_write_attempt);
+    RUN_TEST(test_discarded_is_zero_after_param_rejection);
 
     return UNITY_END();
 }

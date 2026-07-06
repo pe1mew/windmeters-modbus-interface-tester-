@@ -54,8 +54,31 @@ static uint16_t arduino_read(void * /*ctx*/, uint8_t *buf, uint16_t max_len, uin
     return (uint16_t)Serial2.readBytes((char *)buf, max_len);
 }
 
-/** @brief The one live mb_transport_t instance, wired to the arduino_write()/arduino_read() pair above. */
-static mb_transport_t s_arduino_transport = { arduino_write, arduino_read, 0 };
+/**
+ * @brief mb_transport_t::flush implementation: drain Serial2's RX buffer now.
+ *
+ * Satisfies the flush() contract in mb_transport.h — discards every byte
+ * currently buffered (does not block waiting for more) and returns the
+ * count. mb_core calls this before each transmit so a request's read() can't
+ * pick up traffic overheard from other masters on a shared RS-485 bus while
+ * this tester was idle. Same drain idiom the boot-time flush in
+ * mb_transport_arduino_init() uses, but counted, and run on every request
+ * rather than only once at startup.
+ *
+ * @return Number of stale bytes discarded (0 if the buffer was already empty).
+ */
+static uint16_t arduino_flush(void * /*ctx*/)
+{
+    uint16_t discarded = 0;
+    while (Serial2.available()) {
+        Serial2.read();
+        discarded++;
+    }
+    return discarded;
+}
+
+/** @brief The one live mb_transport_t instance, wired to the arduino_write()/arduino_read()/arduino_flush() trio above. */
+static mb_transport_t s_arduino_transport = { arduino_write, arduino_read, arduino_flush, 0 };
 
 const mb_transport_t *mb_transport_arduino_init(uint32_t baud)
 {

@@ -65,6 +65,29 @@ typedef struct {
      */
     uint16_t (*read)(void *ctx, uint8_t *buf, uint16_t max_len, uint16_t timeout_ms);
 
-    /** @brief Opaque context passed back to write()/read(); may be NULL. */
+    /**
+     * @brief Discard any bytes already sitting in the RX buffer; return how
+     *        many were dropped.
+     *
+     * Called by do_transaction() in mb_core.cpp immediately before each
+     * write(), so that whatever the matching read() returns is a response to
+     * the request just sent — not stale traffic overheard while the master
+     * was idle. On a shared RS-485 bus with third-party masters this backlog
+     * is otherwise read ahead of the real response and misparsed as one giant
+     * corrupt frame (bench 2026-07-06; see mb_core.cpp's do_transaction()).
+     *
+     * OPTIONAL: may be NULL. do_transaction() skips the flush when it's NULL,
+     * so a transport with no separate RX buffer to drain (or a test transport
+     * that never accumulates one) doesn't have to implement it. A non-NULL
+     * implementation must drain everything currently buffered and return the
+     * count, not block waiting for more.
+     *
+     * @param ctx Opaque context, passed through unchanged from the @c ctx
+     *            field below; NULL if unused.
+     * @return Number of stale bytes discarded (0 if the buffer was empty).
+     */
+    uint16_t (*flush)(void *ctx);
+
+    /** @brief Opaque context passed back to write()/read()/flush(); may be NULL. */
     void *ctx;
 } mb_transport_t;

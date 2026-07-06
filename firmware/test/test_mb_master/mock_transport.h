@@ -17,5 +17,8 @@ void mock_transport_queue_response(const uint8_t *bytes, uint16_t len);
 void mock_transport_queue_timeout(void);
 int mock_transport_get_transmitted(uint8_t *buf, int max_len);
 int mock_transport_get_write_count(void);
+void mock_transport_stage_stale_bytes(uint16_t n);
+int mock_transport_get_flush_count(void);
+int mock_transport_write_saw_unflushed_stale(void);
 
 extern mb_transport_t mock_transport;

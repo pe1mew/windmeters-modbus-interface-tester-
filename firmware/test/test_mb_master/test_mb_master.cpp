@@ -265,6 +265,47 @@ void test_process_result_survives_a_second_call_overwriting_mb_cores_scratch_sta
     TEST_ASSERT_EQUAL_HEX8(31, result_a.raw_rx[0]);
 }
 
+void test_process_surfaces_flushed_stale_byte_count_in_summary(void)
+{
+    /* Overheard third-party traffic is sitting in the RX buffer at transmit
+     * time. mb_master_process() must still succeed (the backlog is flushed,
+     * not misparsed) and note the discarded count in the log summary so an
+     * operator watching the traffic log sees the bus was noisy. */
+    mock_transport_stage_stale_bytes(30);
+
+    const uint16_t vals[2] = {0x00AA, 0x00BB};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 31, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+
+    mb_request_t req = {31, 0x03, 0x0000, 2, {0}};
+    mb_result_t result = mb_master_process(&req, 12345);
+
+    TEST_ASSERT_EQUAL_INT(MB_OK, result.status);
+
+    /* TX and RX entries share the one summary string — check the newest. */
+    mb_log_entry_t out[2];
+    TEST_ASSERT_EQUAL_UINT32(2, mblog_get_recent(out, 2));
+    TEST_ASSERT_NOT_NULL(strstr(out[0].summary, "[flushed 30]"));
+}
+
+void test_process_clean_bus_summary_has_no_flush_note(void)
+{
+    /* Nothing overheard: the summary must read exactly as it always has, with
+     * no flush annotation — the diagnostic is opt-in on a nonzero count. */
+    const uint16_t vals[2] = {0x00AA, 0x00BB};
+    uint8_t frame[16];
+    uint16_t len = build_read_response(frame, 31, 0x03, vals, 2);
+    mock_transport_queue_response(frame, len);
+
+    mb_request_t req = {31, 0x03, 0x0000, 2, {0}};
+    mb_master_process(&req, 12345);
+
+    mb_log_entry_t out[2];
+    mblog_get_recent(out, 2);
+    TEST_ASSERT_NULL(strstr(out[0].summary, "flushed"));
+}
+
 int main(int /*argc*/, char ** /*argv*/)
 {
     UNITY_BEGIN();
@@ -278,5 +319,7 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_process_timeout_populates_raw_tx_only_no_raw_rx);
     RUN_TEST(test_process_param_error_leaves_raw_tx_rx_and_attempts_zero);
     RUN_TEST(test_process_result_survives_a_second_call_overwriting_mb_cores_scratch_state);
+    RUN_TEST(test_process_surfaces_flushed_stale_byte_count_in_summary);
+    RUN_TEST(test_process_clean_bus_summary_has_no_flush_note);
     return UNITY_END();
 }

@@ -144,3 +144,22 @@ uint16_t mb_get_last_rx(uint8_t *buf, uint16_t max_len);
  *         queue hop) must copy it out immediately, same as the tx/rx bytes.
  */
 uint8_t mb_get_last_attempts(void);
+
+/**
+ * @brief Stale RX bytes flushed before transmitting, over the most recent mb_* call.
+ *
+ * mb_core drains the transport's RX buffer immediately before each write
+ * (see mb_transport_t::flush and do_transaction() in mb_core.cpp); this is
+ * the total it discarded across every attempt of the last call — normally 0,
+ * but nonzero when the master overheard third-party traffic on a shared
+ * RS-485 bus while idle. A pure diagnostic: the transaction still succeeds,
+ * this just reports how much stale backlog had to be cleared first
+ * (surfaced as "[flushed N]" in mb_master_process()'s log summary).
+ *
+ * Same single-scratch-value caveat as mb_get_last_attempts() — valid only
+ * until the next mb_* call; 0 after a PARAM rejection, and 0 for a transport
+ * whose flush callback is NULL.
+ *
+ * @return Number of stale bytes discarded before this call's request(s).
+ */
+uint16_t mb_get_last_discarded(void);

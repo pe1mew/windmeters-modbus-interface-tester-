@@ -24,6 +24,7 @@ static uint16_t s_last_tx_len = 0;           /**< Valid bytes in s_last_tx; 0 if
 static uint8_t  s_last_rx[MB_MAX_FRAME_LEN]; /**< Scratch: response frame bytes from the most recent mb_* call. */
 static uint16_t s_last_rx_len = 0;           /**< Valid bytes in s_last_rx; 0 if nothing was received. */
 static uint8_t  s_last_attempts = 0;         /**< Attempts (1 + retries consumed) the most recent mb_* call took. */
+static uint16_t s_last_discarded = 0;        /**< Stale RX bytes flushed before TX across all attempts of the most recent mb_* call. */
 
 void mb_init(const mb_transport_t *transport, uint16_t timeout_ms, uint8_t retries)
 {
@@ -53,6 +54,11 @@ uint16_t mb_get_last_rx(uint8_t *buf, uint16_t max_len)
 uint8_t mb_get_last_attempts(void)
 {
     return s_last_attempts;
+}
+
+uint16_t mb_get_last_discarded(void)
+{
+    return s_last_discarded;
 }
 
 /**
@@ -97,8 +103,21 @@ static mb_status_t do_transaction(const uint8_t *req, uint16_t req_len,
     memcpy(s_last_tx, req, tx_copy_len);
     s_last_tx_len = tx_copy_len;
     s_last_rx_len = 0; /* cleared up front so a timeout doesn't leak a prior call's RX bytes */
+    s_last_discarded = 0; /* accumulated across the attempts below; 0 if flush is a no-op/NULL */
 
     for (uint8_t attempt = 0; attempt <= s_retries; attempt++) {
+        /* Drain anything already in the RX buffer before transmitting, so the
+         * read() below returns a response to THIS request rather than stale
+         * traffic overheard while idle. On a shared RS-485 bus a third-party
+         * master's frames otherwise pile up and get read ahead of the real
+         * response, misparsed as one oversized corrupt frame -> CRC error
+         * (bench 2026-07-06). Flushed per attempt, not once before the loop:
+         * a retry after a timeout can re-accumulate junk in the gap between
+         * that timeout and this write. flush is optional (NULL for transports
+         * with nothing to drain, e.g. the native test mock by default). */
+        if (s_transport->flush != 0) {
+            s_last_discarded = (uint16_t)(s_last_discarded + s_transport->flush(s_transport->ctx));
+        }
         s_transport->write(s_transport->ctx, req, req_len);
         uint16_t n = s_transport->read(s_transport->ctx, resp, MB_MAX_FRAME_LEN, s_timeout_ms);
         if (n > 0) {
@@ -143,6 +162,7 @@ static mb_status_t read_registers(uint8_t addr, uint8_t fc, uint16_t start,
     s_last_tx_len = 0;
     s_last_rx_len = 0;
     s_last_attempts = 0;
+    s_last_discarded = 0;
 
     if (addr == 0 || out == 0)                    return MB_ERR_PARAM;
     if (count == 0 || count > MB_MAX_READ_REGISTERS) return MB_ERR_PARAM;
@@ -180,6 +200,7 @@ mb_status_t mb_write_single_register(uint8_t addr, uint16_t reg, uint16_t value)
     s_last_tx_len = 0;
     s_last_rx_len = 0;
     s_last_attempts = 0;
+    s_last_discarded = 0;
     if (addr == 0) return MB_ERR_PARAM;
 
     uint8_t req[MB_MAX_FRAME_LEN];
@@ -206,6 +227,7 @@ mb_status_t mb_write_multiple_registers(uint8_t addr, uint16_t start, uint8_t co
     s_last_tx_len = 0;
     s_last_rx_len = 0;
     s_last_attempts = 0;
+    s_last_discarded = 0;
     if (addr == 0 || values == 0)                    return MB_ERR_PARAM;
     if (count == 0 || count > MB_MAX_WRITE_REGISTERS) return MB_ERR_PARAM;
 

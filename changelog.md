@@ -55,6 +55,18 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- On a shared RS-485 bus with other masters, a transaction could report a
+  spurious `CRC_ERR` (and the next transaction then succeed). The master
+  never flushed its UART RX buffer before transmitting, so third-party
+  traffic overheard while the tester idled piled up and was read ahead of
+  the real response — parsed as one oversized corrupt frame (bench
+  2026-07-06: an ADALM2000 raw master driving the DUT produced an RX log
+  entry of ~30 overheard frames followed by the valid response). `mb_core`'s
+  `do_transaction()` now drains the RX buffer immediately before each write
+  attempt (via a new optional `mb_transport_t::flush` callback), so a read
+  only ever returns a response to the request just sent. The count of
+  discarded stale bytes is surfaced as a `[flushed N]` suffix on the traffic
+  log summary. See `memory/gotcha-log.md`.
 - `GET /api/v1/spec`'s response buffer (`char buf[2048]`) truncated once
   the DUT register snapshot grew to describe the full 12+4-register map —
   caught via a real `ConvertFrom-Json` parse failure on hardware at byte

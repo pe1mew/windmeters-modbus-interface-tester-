@@ -32,5 +32,21 @@ int mock_transport_get_transmitted(uint8_t *buf, int max_len);
 /** @brief Number of write() calls made since the last reset. */
 int mock_transport_get_write_count(void);
 
+/**
+ * @brief Pretend @p n bytes are already sitting in the RX buffer, as if
+ *        overheard from another master while idle. The next flush() call
+ *        drains and reports them; drained fully by one flush, like a real UART.
+ */
+void mock_transport_stage_stale_bytes(uint16_t n);
+
+/** @brief Number of flush() calls made since the last reset (one per write attempt). */
+int mock_transport_get_flush_count(void);
+
+/**
+ * @brief 1 if any write() ran while staged stale bytes were still unflushed
+ *        (i.e. a transmit beat its pre-TX flush), else 0. Expected to stay 0.
+ */
+int mock_transport_write_saw_unflushed_stale(void);
+
 /** @brief The transport instance to pass to mb_init(). */
 extern mb_transport_t mock_transport;
