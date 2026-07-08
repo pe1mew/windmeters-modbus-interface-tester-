@@ -26,6 +26,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   `design/completeRealisationPlan.md`, and `design/whatsNext.md` updated to
   match — including `api.md`'s worked examples, recomputed with real CRC16
   values.
+- The AP now forces 20 MHz (HT20) channel width instead of the ESP32 WiFi
+  driver's 40 MHz (HT40) default, via `esp_wifi_set_bandwidth(WIFI_IF_AP,
+  WIFI_BW_HT20)` in `start_ap()`. A 40 MHz AP occupies two 20 MHz channels'
+  worth of 2.4 GHz spectrum, which is unnecessarily wide for a bench tool
+  whose AP exists for reachability, not throughput. Confirmed on hardware
+  via a boot-log readback (`AP bandwidth: requested 20MHz (set result 0),
+  now 20MHz`).
 
 ### Added
 
@@ -75,6 +82,17 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   "`lib/*`") or an unescaped `@file` mention in prose, which Doxygen's
   parser misreads as a nested comment opener / a broken `\file` command —
   found while building the Doxygen pass above, reworded to plain text.
+- The AP could stay up indefinitely even after a client had genuinely
+  connected via STA — reported after being observed on the bench.
+  `wifi_manager_task_fn()`'s connect check only busy-polled
+  `WiFi.status()` for `STA_CONNECT_TIMEOUT_MS` (15 s) and then locked in
+  its "keep AP" decision for the rest of the boot, but `WiFi.begin()` can
+  still land a connection in the background after that window (slow
+  AP/router negotiation, DHCP delay). The idle loop now keeps checking
+  every 5 s and tears the AP down the moment a late connection lands,
+  instead of only at the initial deadline. Still no reconnect-on-drop —
+  a *later* disconnect does not bring the AP back (out of scope for this
+  pass, same as before).
 
 ---
 
