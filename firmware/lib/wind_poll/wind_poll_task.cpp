@@ -90,8 +90,9 @@ static bool do_write_single(uint8_t addr, uint16_t reg, uint16_t value)
 
 /**
  * @brief Task body: while active and the configured poll interval has
- * elapsed (or no data has ever been fetched yet), reads all 12 input
- * registers and decodes them; otherwise idles. A failed read leaves
+ * elapsed (or no data has ever been fetched yet), reads the active type's
+ * input registers (12 or 13, TDS §2.7/FR-MB27) in one FC04 transaction and
+ * decodes them; otherwise idles. A failed read leaves
  * s_latest/s_has_data/s_last_poll_ms untouched so the last good reading
  * survives a transient bus error rather than being blanked.
  */
@@ -101,11 +102,12 @@ static void wind_poll_task_fn(void * /*pvParameters*/)
         if (s_active) {
             uint32_t interval = cfg_get_u32(CFG_KEY_WIND_POLL_INTERVAL, CFG_DEFAULT_WIND_POLL_INTERVAL);
             if (!s_has_data || wind_poll_interval_elapsed(millis(), s_last_poll_ms, interval)) {
-                /* TDS §2.7 (v0.6): both builds implement the same 12-register
-                 * input block (FR-MB27) — always read all 12, not a
-                 * type-conditional 2 or 3 like before that spec matured. */
-                uint16_t raw[12];
-                uint8_t count = wind_sensor_input_register_count();
+                /* 13 is the combined build's map size (TDS §2.7); the
+                 * single-sensor builds only request 12 (below) and never
+                 * touch index 12, so a 13-entry buffer sized for the max
+                 * case is safe to reuse for all three types. */
+                uint16_t raw[13];
+                uint8_t count = wind_sensor_input_register_count(s_active_type);
                 if (do_read_registers(s_target_addr, 0x04, 0x0000, count, raw)) {
                     wind_poll_decode(s_active_type, raw, &s_latest);
                     s_has_data     = true;
@@ -162,19 +164,21 @@ uint32_t wind_poll_age_ms(void)
 
 bool wind_poll_read_config(uint8_t addr, wind_config_t *out)
 {
-    /* TDS §2.8 (v0.6): 4 holding registers, identical addresses/meaning
-     * regardless of sensor type (FR-MB27) — no more type-conditional
-     * "which field is at raw[1]" branching, and no device_addr field
-     * (that register no longer exists, FR-MB07/FR-MB26). */
-    uint16_t raw[4];
+    /* TDS §2.8: 6 holding registers, identical addresses/meaning
+     * regardless of sensor type (FR-MB27) — no type-conditional "which
+     * field is at raw[N]" branching, and no device_addr field (that
+     * register no longer exists, FR-MB07/FR-MB26). */
+    uint16_t raw[6];
     uint8_t count = wind_sensor_holding_register_count();
     if (!do_read_registers(addr, 0x03, 0x0000, count, raw)) {
         return false;
     }
-    out->dir_offset_deg        = wind_config_field_decode(WIND_CFG_DIR_OFFSET, raw[0]);
-    out->measurement_window_ms = (uint16_t)wind_config_field_decode(WIND_CFG_MEASUREMENT_WINDOW, raw[1]);
-    out->averaging_window_s    = (uint16_t)wind_config_field_decode(WIND_CFG_AVERAGING_WINDOW, raw[2]);
-    out->low_speed_cutoff_ms   = wind_config_field_decode(WIND_CFG_LOW_SPEED_CUTOFF, raw[3]);
+    out->dir_offset_deg          = wind_config_field_decode(WIND_CFG_DIR_OFFSET, raw[0]);
+    out->measurement_window_ms   = (uint16_t)wind_config_field_decode(WIND_CFG_MEASUREMENT_WINDOW, raw[1]);
+    out->averaging_window_s      = (uint16_t)wind_config_field_decode(WIND_CFG_AVERAGING_WINDOW, raw[2]);
+    out->low_speed_cutoff_ms     = wind_config_field_decode(WIND_CFG_LOW_SPEED_CUTOFF, raw[3]);
+    out->calibration_c_m_per_rot = wind_config_field_decode(WIND_CFG_CALIBRATION_C, raw[4]);
+    out->pulses_per_rotation     = (uint16_t)wind_config_field_decode(WIND_CFG_PULSES_PER_ROTATION, raw[5]);
     return true;
 }
 

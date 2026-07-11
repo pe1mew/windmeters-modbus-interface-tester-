@@ -249,17 +249,25 @@ of a real result.
 
 Returns a JSON summary of this API: version, endpoint list with methods,
 request/response field tables, the `status` vocabulary (§7), and the
-current DUT register-map snapshot the Wind Speed/Direction tabs use. Intent:
-an LLM given only `http://<ip>/api/v1/spec` can bootstrap a full test
-session without human-provided documentation.
+current DUT register-map snapshot the Wind Speed/Direction/Combined tabs
+use. Intent: an LLM given only `http://<ip>/api/v1/spec` can bootstrap a
+full test session without human-provided documentation.
 
 `dut_register_snapshot` holds one `"wind"` register map (2026-07-02 — was
 briefly keyed by sensor type, `wind_speed`/`wind_direction`, right after the
 physical-separation finding, before the DUT's TDS matured enough to specify
-that both builds actually share one identical map, `design/scratchbook.md`
+that all builds actually share one register layout, `design/scratchbook.md`
 §5/§9). Each input register carries `active_on`, listing which build(s) it
 carries real data on — a register not listed for the current build reads 0.
-There is no device-address holding register (TDS v0.6, FR-MB07/FR-MB26):
+As of 2026-07-11 a third build, `"combined"`, exists (both sensors behind
+one slave address) — its input map is one register longer than the
+single-sensor builds' (13 vs 12: it adds `dir_raw_adc` at raw `0x000C`,
+since raw `0x0004` is the speed pulse count on that build instead of the
+direction raw ADC). The holding map grew from 4 to 6 registers the same
+day, uniformly across every build (an anemometer calibration pair, inert on
+a direction-only build) — `active_on` appears on holding-register entries
+too now, for the two that aren't universal. There is no device-address
+holding register (TDS v0.6, FR-MB07/FR-MB26):
 
 ```json
 {
@@ -270,12 +278,14 @@ There is no device-address holding register (TDS v0.6, FR-MB07/FR-MB26):
   "dut_register_snapshot": {
     "wind": {
       "input_registers": [
-        { "addr": 0, "name": "dir_instant", "unit": "0.1 deg", "active_on": ["direction"] },
-        { "addr": 1, "name": "speed_instant", "unit": "0.1 m/s", "active_on": ["speed"] }
+        { "addr": 0, "name": "dir_instant", "unit": "0.1 deg", "active_on": ["direction", "combined"] },
+        { "addr": 1, "name": "speed_instant", "unit": "0.1 m/s", "active_on": ["speed", "combined"] },
+        { "addr": 12, "name": "dir_raw_adc", "unit": "raw 10-bit ADC", "active_on": ["combined"] }
       ],
       "holding_registers": [
         { "addr": 0, "name": "dir_offset", "unit": "0.1 deg", "range": [0, 3599] },
-        { "addr": 1, "name": "measurement_window_ms", "range": [100, 60000] }
+        { "addr": 1, "name": "measurement_window_ms", "range": [100, 60000] },
+        { "addr": 4, "name": "calibration_c", "unit": "0.001 m/rotation", "range": [1, 6553], "active_on": ["speed", "combined"] }
       ]
     }
   }
@@ -371,7 +381,7 @@ log, newest last:
 Useful to a client for post-hoc debugging ("show me what actually went
 over the wire while the wind poller was running").
 
-### 5.5 `GET /api/v1/wind?type=speed|direction` — cached wind reading
+### 5.5 `GET /api/v1/wind?type=speed|direction|combined` — cached wind reading
 
 Added during spec review (§10) — not in the original draft. Without this,
 a machine client wanting wind data would have to re-issue `POST
@@ -387,6 +397,17 @@ different devices at two different addresses), so this endpoint takes a
 `type` query parameter (`"speed"` default if omitted, or `"direction"`) and
 returns only the fields meaningful for that type — it no longer returns
 both sensors' data in one combined object.
+
+**Updated 2026-07-11 for the combined build**: a third physical variant
+exists (`"combined"`, both sensors behind one slave address, TDS FR-S01) —
+`type=combined` returns the *union* of the speed and direction shapes
+below, reusing the same field names each already has (`raw_pulses`/
+`gust_ms`/`seconds_since_pulse` from the speed shape, `raw_adc` from the
+direction shape), not a fourth distinct shape. This is not the same thing
+as the pre-split "one combined object" the note above describes — that was
+two different physical devices' data merged for API convenience; this is
+one physical device whose own register map genuinely carries both
+sensors' data in one FC04 read.
 
 ```json
 // GET /api/v1/wind?type=speed
@@ -419,26 +440,47 @@ both sensors' data in one combined object.
 }
 ```
 
+```json
+// GET /api/v1/wind?type=combined
+{
+  "ok": true,
+  "has_data": true,
+  "target": 32,
+  "sensor_type": "combined",
+  "speed_instant_ms": 4.2,
+  "speed_avg_ms": 3.9,
+  "raw_pulses": 30,
+  "gust_ms": 6.5,
+  "seconds_since_pulse": 8,
+  "dir_instant_deg": 182.8,
+  "dir_avg_deg": 181.0,
+  "dir_fault": false,
+  "raw_adc": 520,
+  "age_ms": 420
+}
+```
+
 Same fields as the WebSocket `type:"wind"` payload for that sensor type
 (`web_core_build_wind_json`, `web_core_build_api_wind_json` — already
 implemented and tested) — this is a route over existing logic, not new
 decode logic. `{"ok":true,"has_data":false}` when the requested `type`
-isn't the one currently polling (only one of the two can be active at a
+isn't the one currently polling (only one of the three can be active at a
 time — `busy.wind_poll_active` in §5.2 reflects whichever is) or nothing
 has been read yet, matching the WebSocket shape's existing convention.
 `target` is the requested type's NVS-stored (or default) address —
-`wind_speed_addr`/`wind_dir_addr`, not the old single `wind_test_addr` —
-which may differ from the address actually in flight if a caller started
-polling with an ad hoc `addr` override via `POST /wind/start` rather than
-the stored default.
+`wind_speed_addr`/`wind_dir_addr`/`wind_comb_addr`, not the old single
+`wind_test_addr` — which may differ from the address actually in flight if
+a caller started polling with an ad hoc `addr` override via `POST
+/wind/start` rather than the stored default.
 
 ---
 
 ## 6. Worked examples (curl)
 
-Read the Wind Direction unit's instantaneous heading (raw addressing; both
-wind units share one identical 12-register input map, `design/scratchbook.md`
-§5 — register 0 is meaningful on a direction build, reads 0 on a speed one):
+Read the Wind Direction unit's instantaneous heading (raw addressing; all
+wind builds share one register layout, `design/scratchbook.md` §5 —
+register 0 is meaningful on a direction or combined build, reads 0 on a
+speed-only one):
 
 ```sh
 curl -s -X POST http://192.168.4.1/api/v1/modbus \
@@ -447,7 +489,7 @@ curl -s -X POST http://192.168.4.1/api/v1/modbus \
 ```
 
 Write the averaging window using a Modicon register number (holding
-register 2 — `40003` — identical on both wind units, `design/scratchbook.md`
+register 2 — `40003` — identical on every wind build, `design/scratchbook.md`
 §5):
 
 ```sh

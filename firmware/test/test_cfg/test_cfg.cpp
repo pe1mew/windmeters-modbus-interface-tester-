@@ -108,7 +108,8 @@ void test_all_keys_fit_the_15_char_preferences_limit(void)
         CFG_KEY_WIFI_SSID, CFG_KEY_WIFI_PASS, CFG_KEY_NTP_SERVER,
         CFG_KEY_MB_BAUD, CFG_KEY_MB_TIMEOUT_MS, CFG_KEY_MB_RETRIES,
         CFG_KEY_SCAN_RANGE_START, CFG_KEY_SCAN_RANGE_END,
-        CFG_KEY_WIND_SPEED_ADDR, CFG_KEY_WIND_DIR_ADDR, CFG_KEY_WIND_POLL_INTERVAL,
+        CFG_KEY_WIND_SPEED_ADDR, CFG_KEY_WIND_DIR_ADDR, CFG_KEY_WIND_COMBINED_ADDR,
+        CFG_KEY_WIND_POLL_INTERVAL,
     };
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
         TEST_ASSERT_TRUE_MESSAGE(strlen(keys[i]) <= 15, keys[i]);

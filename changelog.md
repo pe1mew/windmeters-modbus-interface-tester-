@@ -51,6 +51,30 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   root-level `Doxyfile` (output to `docs/doxygen/`, gitignored) builds it
   with `WARN_IF_UNDOCUMENTED`/`WARN_NO_PARAMDOC` enabled as the completeness
   gate — the tree now builds with zero Doxygen warnings.
+- **Wind Combined** support — a third DUT build variant (both wind sensors
+  behind one slave address, 32/37 jumpered, TDS FR-S01/FR-S03) alongside
+  the existing Wind Speed / Wind Direction builds:
+  - `wind_poll` core: `WIND_SENSOR_COMBINED`, a 13th input register
+    (`dir_raw_adc`, raw `0x000C`/30013 — the direction raw ADC moves here
+    on this build since `0x0004` carries the speed pulse count instead),
+    and `wind_sensor_input_register_count(type)` is type-dependent again
+    (12 single-sensor, 13 combined) since the DUT's own map edge genuinely
+    differs. Two new holding registers, uniform across every build:
+    `calibration_c` (`0x0004`/40005, anemometer calibration factor,
+    0.001 m/rotation, 1–6553) and `pulses_per_rotation` (`0x0005`/40006,
+    1–1000) — inert but still present/persisted on a direction-only build.
+  - New **Wind Combined** GUI tab, modeled on the existing two: register
+    reference table (13 input + 6 holding), Start/Stop/address/interval
+    controls, a Speed card and a Direction card populated from one atomic
+    13-register poll, the same red "Sensor fault" badge as Wind Direction,
+    and a six-field config form (all four existing fields plus the two new
+    calibration ones) with per-field Write buttons and a bulk read-back.
+  - WebSocket `type:"wind"` and `GET /api/v1/wind?type=combined` both gained
+    a `"combined"` `sensor_type` — the union of the speed and direction
+    payloads' fields, reusing the same key names, not a fourth shape.
+    `/wind/start`, `/wind/config/read`, `/wind/config/write`, and
+    `/api/v1/spec`'s register snapshot all updated to match. New NVS key
+    `wind_comb_addr` (default 32) for the tab's last-used address.
 
 ### Removed
 

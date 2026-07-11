@@ -144,6 +144,56 @@ void test_wind_json_direction_with_data(void)
         buf);
 }
 
+void test_wind_json_no_data_combined(void)
+{
+    wind_reading_t reading;
+    memset(&reading, 0, sizeof(reading));
+
+    char buf[384];
+    web_core_build_wind_json(buf, sizeof(buf), WIND_SENSOR_COMBINED, &reading, false, 0);
+    TEST_ASSERT_EQUAL_STRING("{\"type\":\"wind\",\"sensor_type\":\"combined\",\"has_data\":false}", buf);
+}
+
+void test_wind_json_combined_with_data(void)
+{
+    /* Combined is the union of the speed and direction shapes above, same
+     * key names — "raw_adc" reused for dir_raw_adc (30013 on this build,
+     * distinct from raw_diagnostic/30005 which is the speed pulse count
+     * here, not the direction ADC it is on a direction-only build). */
+    wind_reading_t reading;
+    memset(&reading, 0, sizeof(reading));
+    reading.speed_instant_ms    = 4.2f;
+    reading.speed_avg_ms        = 3.9f;
+    reading.raw_diagnostic      = 30;
+    reading.gust_ms             = 6.5f;
+    reading.seconds_since_pulse = 8;
+    reading.dir_instant_deg     = 182.8f;
+    reading.dir_avg_deg         = 181.0f;
+    reading.dir_fault           = false;
+    reading.dir_raw_adc         = 520;
+
+    char buf[384];
+    web_core_build_wind_json(buf, sizeof(buf), WIND_SENSOR_COMBINED, &reading, true, 420);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"wind\",\"sensor_type\":\"combined\",\"has_data\":true,"
+        "\"speed_instant_ms\":4.2,\"speed_avg_ms\":3.9,\"raw_pulses\":30,"
+        "\"gust_ms\":6.5,\"seconds_since_pulse\":8,"
+        "\"dir_instant_deg\":182.8,\"dir_avg_deg\":181.0,\"dir_fault\":false,"
+        "\"raw_adc\":520,\"age_ms\":420}",
+        buf);
+}
+
+void test_wind_json_combined_reports_dir_fault(void)
+{
+    wind_reading_t reading;
+    memset(&reading, 0, sizeof(reading));
+    reading.dir_fault = true;
+
+    char buf[384];
+    web_core_build_wind_json(buf, sizeof(buf), WIND_SENSOR_COMBINED, &reading, true, 100);
+    TEST_ASSERT_TRUE(strstr(buf, "\"dir_fault\":true") != NULL);
+}
+
 /* ── status JSON ── */
 
 void test_status_json_no_exception(void)
@@ -455,6 +505,31 @@ void test_api_wind_json_direction_with_data(void)
         buf);
 }
 
+void test_api_wind_json_combined_with_data(void)
+{
+    wind_reading_t reading;
+    memset(&reading, 0, sizeof(reading));
+    reading.speed_instant_ms    = 4.2f;
+    reading.speed_avg_ms        = 3.9f;
+    reading.raw_diagnostic      = 30;
+    reading.gust_ms             = 6.5f;
+    reading.seconds_since_pulse = 8;
+    reading.dir_instant_deg     = 182.8f;
+    reading.dir_avg_deg         = 181.0f;
+    reading.dir_fault           = false;
+    reading.dir_raw_adc         = 520;
+
+    char buf[384];
+    web_core_build_api_wind_json(buf, sizeof(buf), 32, WIND_SENSOR_COMBINED, true, &reading, true, 420);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"ok\":true,\"has_data\":true,\"target\":32,\"sensor_type\":\"combined\","
+        "\"speed_instant_ms\":4.2,\"speed_avg_ms\":3.9,"
+        "\"raw_pulses\":30,\"gust_ms\":6.5,\"seconds_since_pulse\":8,"
+        "\"dir_instant_deg\":182.8,\"dir_avg_deg\":181.0,\"dir_fault\":false,"
+        "\"raw_adc\":520,\"age_ms\":420}",
+        buf);
+}
+
 /* ── machine API — GET /api/v1/log JSON, api.md §5.4 ── */
 
 void test_api_log_json_empty(void)
@@ -645,6 +720,9 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_wind_json_no_data_direction);
     RUN_TEST(test_wind_json_speed_with_data);
     RUN_TEST(test_wind_json_direction_with_data);
+    RUN_TEST(test_wind_json_no_data_combined);
+    RUN_TEST(test_wind_json_combined_with_data);
+    RUN_TEST(test_wind_json_combined_reports_dir_fault);
     RUN_TEST(test_status_json_no_exception);
     RUN_TEST(test_status_json_with_exception);
     RUN_TEST(test_valid_function_codes_accepted);
@@ -666,6 +744,7 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_api_wind_json_active_no_data_yet);
     RUN_TEST(test_api_wind_json_speed_with_data);
     RUN_TEST(test_api_wind_json_direction_with_data);
+    RUN_TEST(test_api_wind_json_combined_with_data);
     RUN_TEST(test_api_log_json_empty);
     RUN_TEST(test_api_log_json_reverses_newest_first_to_oldest_first);
     RUN_TEST(test_api_log_json_uses_iso8601_when_synced);

@@ -3,11 +3,17 @@
  *
  * Covers completeRealisationPlan.md TASK-WIND's acceptance tests at the
  * decode/encode level, against the DUT's Technical Design Specification
- * (windmeters-modbus-interface/design/TDS.md §2.7/§2.8, v0.6): wind speed
- * and wind direction are two physically separate units — own slave
- * address, own compile-time build — but as of TDS v0.6 both implement an
- * *identical* 12-input/4-holding register map at identical addresses
- * (FR-MB27); a register the active sensor doesn't use just reads 0.
+ * (windmeters-modbus-interface/design/TDS.md §2.7/§2.8, v0.6+): three
+ * physically separate build variants exist — wind speed, wind direction,
+ * and combined (both sensors behind one slave address) — own slave
+ * address, own compile-time build. All three implement the same register
+ * layout as far as it goes (FR-MB27); a register the active build's
+ * sensor doesn't use just reads 0. The combined build's input map is one
+ * register longer than the single-sensor builds' (13 vs 12 — TDS §2.7
+ * adds 30013, the combined build's direction raw ADC, since 30005 is
+ * taken there by the speed pulse count); the holding map is uniformly 6
+ * registers on every build (2026-07-11: added the anemometer calibration
+ * pair, 40005/40006).
  *
  * Run with:  pio test -e native -f test_wind_poll
  */
@@ -122,16 +128,76 @@ void test_wind_poll_fault_sentinel_ignored_on_speed_build(void)
     TEST_ASSERT_FALSE(reading.dir_fault);
 }
 
-/* ── register counts (TDS §2.7/§2.8 — fixed, identical on both builds) ── */
+/* ── combined build (TDS §2.7, FR-MB27): 13-register map, both sensors
+ *    live in one FC04 read, plus the direction raw ADC at 30013 ── */
 
-void test_input_register_count_is_twelve(void)
+void test_wind_poll_decodes_combined_fields_from_full_thirteen_register_block(void)
 {
-    TEST_ASSERT_EQUAL_UINT8(12, wind_sensor_input_register_count());
+    /* Same 0-11 layout as the single-sensor builds, plus raw[12] = dir_raw_adc
+     * (30013) — combined build only. Both dir_* and speed_* fields are live
+     * simultaneously here, unlike either single-sensor build. */
+    uint16_t raw[13] = {1828, 42, 1810, 39, 30, 0, 0x0301, 120, 0, 500, 0, 65, 520};
+    wind_reading_t reading;
+    wind_poll_decode(WIND_SENSOR_COMBINED, raw, &reading);
+
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 182.8f, reading.dir_instant_deg);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 181.0f, reading.dir_avg_deg);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 4.2f, reading.speed_instant_ms);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 3.9f, reading.speed_avg_ms);
+    TEST_ASSERT_EQUAL_UINT16(30, reading.raw_diagnostic);       /* pulse count, not raw ADC, on combined */
+    TEST_ASSERT_EQUAL_UINT16(0, reading.seconds_since_pulse);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 6.5f, reading.gust_ms);
+    TEST_ASSERT_EQUAL_UINT16(520, reading.dir_raw_adc);         /* 30013 — combined-only field */
+    TEST_ASSERT_FALSE(reading.dir_fault);
 }
 
-void test_holding_register_count_is_four(void)
+void test_wind_poll_direction_fault_sentinel_also_applies_on_combined_build(void)
 {
-    TEST_ASSERT_EQUAL_UINT8(4, wind_sensor_holding_register_count());
+    /* FR-S38's fault path is the same code on combined as on a
+     * direction-only build (per the DUT's own test report) — dir_fault
+     * must not be gated to WIND_SENSOR_DIRECTION alone. */
+    uint16_t raw[13] = {0};
+    raw[0] = 65535;
+    raw[2] = 65535;
+    wind_reading_t reading;
+    wind_poll_decode(WIND_SENSOR_COMBINED, raw, &reading);
+    TEST_ASSERT_TRUE(reading.dir_fault);
+}
+
+void test_wind_poll_dir_raw_adc_is_zero_for_non_combined_types(void)
+{
+    /* Speed/direction builds only have a 12-register map (TDS §2.7) — a
+     * caller is allowed to pass a 12-entry buffer for those (wind_poll.h's
+     * contract), so decode() must never read index 12 unless type is
+     * combined. Use a 13-entry buffer with a nonzero index 12 here
+     * specifically to prove it's ignored, not just coincidentally 0. */
+    uint16_t raw[13] = {0};
+    raw[12] = 999; /* would be wrong if decode() read this for a non-combined type */
+    wind_reading_t reading;
+    wind_poll_decode(WIND_SENSOR_SPEED, raw, &reading);
+    TEST_ASSERT_EQUAL_UINT16(0, reading.dir_raw_adc);
+    wind_poll_decode(WIND_SENSOR_DIRECTION, raw, &reading);
+    TEST_ASSERT_EQUAL_UINT16(0, reading.dir_raw_adc);
+}
+
+/* ── register counts (TDS §2.7/§2.8) — input count is type-dependent
+ *    (12 single-sensor, 13 combined, FR-MB27); holding count is uniform
+ *    (6, every build) ── */
+
+void test_input_register_count_is_twelve_for_speed_and_direction(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(12, wind_sensor_input_register_count(WIND_SENSOR_SPEED));
+    TEST_ASSERT_EQUAL_UINT8(12, wind_sensor_input_register_count(WIND_SENSOR_DIRECTION));
+}
+
+void test_input_register_count_is_thirteen_for_combined(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(13, wind_sensor_input_register_count(WIND_SENSOR_COMBINED));
+}
+
+void test_holding_register_count_is_six(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(6, wind_sensor_holding_register_count());
 }
 
 /* ── config field register mapping (TDS §2.8 — fixed, no device-address
@@ -143,6 +209,8 @@ void test_config_field_register_mapping(void)
     TEST_ASSERT_EQUAL_HEX16(0x0001, wind_config_field_register(WIND_CFG_MEASUREMENT_WINDOW));
     TEST_ASSERT_EQUAL_HEX16(0x0002, wind_config_field_register(WIND_CFG_AVERAGING_WINDOW));
     TEST_ASSERT_EQUAL_HEX16(0x0003, wind_config_field_register(WIND_CFG_LOW_SPEED_CUTOFF));
+    TEST_ASSERT_EQUAL_HEX16(0x0004, wind_config_field_register(WIND_CFG_CALIBRATION_C));
+    TEST_ASSERT_EQUAL_HEX16(0x0005, wind_config_field_register(WIND_CFG_PULSES_PER_ROTATION));
 }
 
 /* ── encode / decode ── */
@@ -163,6 +231,19 @@ void test_config_field_encode_windows_unscaled(void)
     TEST_ASSERT_EQUAL_UINT16(10, wind_config_field_encode(WIND_CFG_AVERAGING_WINDOW, 10.0f));
 }
 
+void test_config_field_encode_calibration_c_scaled_by_1000(void)
+{
+    /* TDS §2.8 default: 40005 = 980 raw <-> 0.980 m/rotation. */
+    TEST_ASSERT_EQUAL_UINT16(980, wind_config_field_encode(WIND_CFG_CALIBRATION_C, 0.980f));
+    TEST_ASSERT_EQUAL_UINT16(6553, wind_config_field_encode(WIND_CFG_CALIBRATION_C, 6.553f)); /* top of valid range */
+}
+
+void test_config_field_encode_pulses_per_rotation_unscaled(void)
+{
+    TEST_ASSERT_EQUAL_UINT16(1, wind_config_field_encode(WIND_CFG_PULSES_PER_ROTATION, 1.0f));
+    TEST_ASSERT_EQUAL_UINT16(4, wind_config_field_encode(WIND_CFG_PULSES_PER_ROTATION, 4.0f));
+}
+
 void test_config_field_decode_round_trip(void)
 {
     uint16_t raw = wind_config_field_encode(WIND_CFG_DIR_OFFSET, 45.6f);
@@ -171,6 +252,9 @@ void test_config_field_decode_round_trip(void)
 
     uint16_t raw_cutoff = wind_config_field_encode(WIND_CFG_LOW_SPEED_CUTOFF, 3.5f);
     TEST_ASSERT_FLOAT_WITHIN(0.05f, 3.5f, wind_config_field_decode(WIND_CFG_LOW_SPEED_CUTOFF, raw_cutoff));
+
+    uint16_t raw_calib = wind_config_field_encode(WIND_CFG_CALIBRATION_C, 0.980f);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.980f, wind_config_field_decode(WIND_CFG_CALIBRATION_C, raw_calib));
 }
 
 void test_interval_elapsed_false_before_interval(void)
@@ -195,12 +279,18 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_wind_poll_direction_fault_sentinel_sets_flag);
     RUN_TEST(test_wind_poll_direction_fault_sentinel_on_only_one_field_still_flags);
     RUN_TEST(test_wind_poll_fault_sentinel_ignored_on_speed_build);
-    RUN_TEST(test_input_register_count_is_twelve);
-    RUN_TEST(test_holding_register_count_is_four);
+    RUN_TEST(test_wind_poll_decodes_combined_fields_from_full_thirteen_register_block);
+    RUN_TEST(test_wind_poll_direction_fault_sentinel_also_applies_on_combined_build);
+    RUN_TEST(test_wind_poll_dir_raw_adc_is_zero_for_non_combined_types);
+    RUN_TEST(test_input_register_count_is_twelve_for_speed_and_direction);
+    RUN_TEST(test_input_register_count_is_thirteen_for_combined);
+    RUN_TEST(test_holding_register_count_is_six);
     RUN_TEST(test_config_field_register_mapping);
     RUN_TEST(test_config_field_encode_dir_offset_scaled_by_10);
     RUN_TEST(test_config_field_encode_low_speed_cutoff_scaled_by_10);
     RUN_TEST(test_config_field_encode_windows_unscaled);
+    RUN_TEST(test_config_field_encode_calibration_c_scaled_by_1000);
+    RUN_TEST(test_config_field_encode_pulses_per_rotation_unscaled);
     RUN_TEST(test_config_field_decode_round_trip);
     RUN_TEST(test_interval_elapsed_false_before_interval);
     RUN_TEST(test_interval_elapsed_true_at_or_after_interval);

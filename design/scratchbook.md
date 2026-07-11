@@ -160,59 +160,75 @@ survives the TDS changing again without a tester rebuild.
 
 - MCU: CH32V003J4M6 (RISC-V), transceiver MAX3485, 24 V passive PoE-style
   power over RJ45 (pins 4/5 +, 7/8 −).
-- Two build variants, distinguished by slave address (solder-jumper
+- Three build variants, distinguished by slave address (solder-jumper
   selectable, TDS FR-S03): wind **speed** (cup anemometer, pulse counting on
   a hardware timer) at address **30** (or 35 jumpered), wind **direction**
-  (potentiometer, ADC) at address **31** (or 36 jumpered).
+  (potentiometer, ADC) at address **31** (or 36 jumpered), and **combined**
+  (both sensors, one board, one slave) at address **32** (or 37 jumpered) —
+  added to the DUT 2026-07-11.
 - 9600 8N1 (TDS FR-MB01). No baud config register — fixed, unlike the S200
   sensor's `0x1001` in the existing greenhouse firmware.
 
-**One identical register map on both builds, not two different maps
-(2026-07-02 correction, TDS v0.6 FR-MB27):** earlier revisions of this
-section assumed wind speed and wind direction implement *different,
-type-specific* register blocks (first a single 5-input/4-holding map shared
-by both, then — once the physical-separation finding landed — two separate,
-differently-sized maps). The DUT's own TDS settled this differently once it
-matured enough to specify it formally: **both builds implement the exact
-same 12-input/4-holding register map at the exact same addresses.** A
-register the active build's sensor doesn't have simply reads 0 rather than
-not existing. There is also **no device-address holding register** as of
-TDS v0.6 (FR-MB07/FR-MB26) — the Modbus address is hardware-configured only
-(build define + PC4 solder jumper) and cannot be read or changed over
-Modbus; a write to the register address that concept used to occupy now
-correctly returns exception 02 (illegal data address).
+**One register layout across all builds, not a per-build map (2026-07-02
+correction, TDS v0.6 FR-MB27; extended 2026-07-11 for the combined build):**
+earlier revisions of this section assumed wind speed and wind direction
+implement *different, type-specific* register blocks (first a single
+5-input/4-holding map shared by both, then — once the physical-separation
+finding landed — two separate, differently-sized maps). The DUT's own TDS
+settled this differently once it matured enough to specify it formally:
+**every build implements the same register layout at the same addresses,**
+as far as it goes — a register the active build's sensor doesn't have
+simply reads 0 rather than not existing. The one genuine exception: the
+**combined** build's input map is one register longer than the
+single-sensor builds' (13 vs 12) — it adds `dir_raw_adc` at raw `0x000C`
+(30013), since raw `0x0004` on that build carries the speed pulse count
+instead of the direction raw ADC the single-sensor builds put there. A
+single-sensor build's own map edge stays at `0x000C` (12 registers) — FC04
+past that returns exception 02 (illegal data address, FR-MB13), so the
+tester requests 12 or 13 registers depending on which build it's polling,
+not a hardcoded constant. There is also **no device-address holding
+register** as of TDS v0.6 (FR-MB07/FR-MB26) — the Modbus address is
+hardware-configured only (build define + PC4 solder jumper) and cannot be
+read or changed over Modbus; a write to the register address that concept
+used to occupy now correctly returns exception 02 (illegal data address).
 
-### Input registers (FC04, read-only) — TDS §2.7, identical on both builds
+### Input registers (FC04, read-only) — TDS §2.7
 
-●&nbsp;=&nbsp;carries real data on that build. ○&nbsp;=&nbsp;reads 0 on that build (FR-MB27).
+●&nbsp;=&nbsp;carries real data on that build. ○&nbsp;=&nbsp;reads 0 on that build (FR-MB27). —&nbsp;=&nbsp;not mapped on that build (exception 02).
 
-| Address (raw) | Modicon # | Content | Unit | Range | Speed | Direction |
-|---|---|---|---|---|---|---|
-| `0x0000` | 30001 | Wind direction, instantaneous | 0.1° | 0–3599; 65535 = sensor fault | ○ | ● |
-| `0x0001` | 30002 | Wind speed, instantaneous | 0.1 m/s | 0–65535 | ● | ○ |
-| `0x0002` | 30003 | Wind direction, averaged | 0.1° | 0–3599; 65535 = sensor fault | ○ | ● |
-| `0x0003` | 30004 | Wind speed, averaged | 0.1 m/s | 0–65535 | ● | ○ |
-| `0x0004` | 30005 | Raw diagnostic | build-specific | speed: pulse count last window; direction: last raw 10-bit ADC (0–1023) | ● | ● |
-| `0x0005` | 30006 | Status flags (bitfield) | — | bit0=no window yet, bit1=averaging not filled, bit2=direction fault | ● | ● |
-| `0x0006` | 30007 | Identification | — | high byte = build type, low byte = fw version | ● | ● |
-| `0x0007` | 30008 | Uptime since reset | s | 0–65535, saturating | ● | ● |
-| `0x0008` | 30009 | Bus CRC error count | — | 0–65535, wrapping | ● | ● |
-| `0x0009` | 30010 | Served request count | — | 0–65535, wrapping | ● | ● |
-| `0x000A` | 30011 | Seconds since last pulse | s | 0–65535, clamped | ● | ○ |
-| `0x000B` | 30012 | Gust: max window speed in current averaging window | 0.1 m/s | 0–65535 | ● | ○ |
+| Address (raw) | Modicon # | Content | Unit | Range | Speed | Direction | Combined |
+|---|---|---|---|---|---|---|---|
+| `0x0000` | 30001 | Wind direction, instantaneous | 0.1° | 0–3599; 65535 = sensor fault | ○ | ● | ● |
+| `0x0001` | 30002 | Wind speed, instantaneous | 0.1 m/s | 0–65535 | ● | ○ | ● |
+| `0x0002` | 30003 | Wind direction, averaged | 0.1° | 0–3599; 65535 = sensor fault | ○ | ● | ● |
+| `0x0003` | 30004 | Wind speed, averaged | 0.1 m/s | 0–65535 | ● | ○ | ● |
+| `0x0004` | 30005 | Raw diagnostic | build-specific | speed/combined: pulse count last window; direction-only: last raw 10-bit ADC (0–1023) | ● | ● | ● |
+| `0x0005` | 30006 | Status flags (bitfield) | — | bit0=no window yet, bit1=averaging not filled, bit2=direction fault | ● | ● | ● |
+| `0x0006` | 30007 | Identification | — | high byte = build type (0x01/0x02/0x03), low byte = fw version | ● | ● | ● |
+| `0x0007` | 30008 | Uptime since reset | s | 0–65535, saturating | ● | ● | ● |
+| `0x0008` | 30009 | Bus CRC error count | — | 0–65535, wrapping | ● | ● | ● |
+| `0x0009` | 30010 | Served request count | — | 0–65535, wrapping | ● | ● | ● |
+| `0x000A` | 30011 | Seconds since last pulse | s | 0–65535, clamped | ● | ○ | ● |
+| `0x000B` | 30012 | Gust: max window speed in current averaging window | 0.1 m/s | 0–65535 | ● | ○ | ● |
+| `0x000C` | 30013 | Wind direction, raw 10-bit ADC — **combined build only** | — | 0–1023 | — | — | ● |
 
 The tester decodes and displays the measurement-relevant fields (direction/
-speed instant+average, raw diagnostic, gust, seconds-since-pulse) on their
-respective tabs; the device-level diagnostics (status/identification/
-uptime/CRC-count/request-count) aren't decoded into the GUI — they're real,
-documented registers reachable via Register Explorer, just not wind
-measurement data.
+speed instant+average, raw diagnostic, gust, seconds-since-pulse, and on the
+combined build, `dir_raw_adc`) on their respective tabs; the device-level
+diagnostics (status/identification/uptime/CRC-count/request-count) aren't
+decoded into the GUI — they're real, documented registers reachable via
+Register Explorer, just not wind measurement data.
 
-### Holding registers (FC03 read / FC06 write single / FC16 write multiple) — TDS §2.8, identical on both builds
+### Holding registers (FC03 read / FC06 write single / FC16 write multiple) — TDS §2.8, identical on every build
 
-All registers are **volatile** — reset to the Default column on any reset,
-power-on or otherwise (TDS FR-S21). Both builds accept writes to all 4
-(FR-MB27) even though only some are functionally meaningful per build.
+All six registers **persist across reset and power-loss in the DUT's
+on-chip non-volatile storage (TDS FR-S39)** — the Default column below is
+only what a *blank or corrupt* store falls back to (TDS FR-S21), not what
+every reset resets to; a value a master writes stays written. Every build
+accepts writes to all 6 (FR-MB27) even though only some are functionally
+meaningful per build — 40005/40006 (added 2026-07-11) affect only the speed
+path and are inert, but still present/writable/persisted, on a
+direction-only build (TDS FR-S40).
 
 | Address (raw) | Modicon # | Purpose | Unit | Valid range | Default |
 |---|---|---|---|---|---|
@@ -220,12 +236,14 @@ power-on or otherwise (TDS FR-S21). Both builds accept writes to all 4
 | `0x0001` | 40002 | Measurement window duration | ms | 100–60000 | 1000 |
 | `0x0002` | 40003 | Averaging window | s | 1–600 (also constrained relative to the measurement window, TDS FR-S31) | 10 |
 | `0x0003` | 40004 | Low-speed cut-off threshold | 0.1 m/s | 0–50 | 4 |
+| `0x0004` | 40005 | Anemometer calibration factor C | 0.001 m/rotation | 1–6553 | 980 |
+| `0x0005` | 40006 | Anemometer pulses per rotation | pulses/rot | 1–1000 | 1 |
 
 The tester's Wind Speed tab exposes measurement window, averaging window,
 and low-speed cutoff; Wind Direction exposes direction offset and averaging
-window — matching which fields are functionally relevant per build, even
-though the wire-level map no longer restricts which registers a given
-build's writes will accept.
+window; Wind Combined exposes all six — matching which fields are
+functionally relevant per build, even though the wire-level map no longer
+restricts which registers a given build's writes will accept.
 
 > ⚠️ **Scaling gotcha:** this DUT encodes at **×10** (implied one decimal
 > place). The S200 sensor already integrated into greenhouse-Controller's
@@ -278,7 +296,7 @@ lib_deps =
 |---|---|---|
 | `modbus_master_task` | Highest | Sole owner of the RS-485 UART. Executes one queued transaction (probe / read / write) at a time, enforces timeout + inter-frame gap, posts every TX/RX frame to the log queue. |
 | `scan_task` | Normal | On request, sweeps an address range through `modbus_master_task`, streams progress + hits to the web UI. Suspended when idle. |
-| `wind_poll_task` | Normal | While either the Wind Speed or Wind Direction tab targets an address (one at a time, §9), polls the shared 12-register input block (§5, identical on both builds) at a configurable interval via `modbus_master_task`, decoding only the fields meaningful for the active type; updates shared state under mutex. Suspended when idle. |
+| `wind_poll_task` | Normal | While one of the Wind Speed / Wind Direction / Wind Combined tabs targets an address (one at a time, §9), polls that build's input block (§5 — 12 registers on the single-sensor builds, 13 on combined) at a configurable interval via `modbus_master_task`, decoding only the fields meaningful for the active type; updates shared state under mutex. Suspended when idle. |
 | `web_server_task` | Normal | HTTP + WebSocket server. Unchanged from template. |
 | `wifi_manager_task` | Normal | AP/STA switching, mDNS. Unchanged from template. |
 | `ntp_task` | Normal | Time sync, used only to timestamp the traffic log. Unchanged from template. |
@@ -350,12 +368,24 @@ Sections, replacing the template's sensor-config section with scan/test/explore:
   registers functionally relevant to that type (Wind Speed: measurement
   window/averaging window/low-speed cutoff; Wind Direction: direction
   offset/averaging window — no device-address field on either as of TDS
-  v0.6, §5) with FC06 write-back. Only one of the two can poll at a time in v1 — same
-  "one target at a time" constraint as the original combined panel, just now
-  expressed as "one *tab*, not one *field of a shared panel*" (§9). Starting
-  one tab's poll silently stops the other's if it was running; the GUI
-  corrects the other tab's Start/Stop buttons on the next status update
-  rather than leaving them showing a stale "running" state.
+  v0.6, §5) with FC06 write-back.
+- **Wind Combined** *(new 2026-07-11 — a third DUT build variant, not a
+  GUI-only feature)*: the DUT gained a build that serves both sensors from
+  one board behind one slave address (§5), so it gets its own third tab
+  rather than being folded into Speed/Direction. Same shape as the other
+  two tabs — register-map table, controls, config form with FC06 write-back
+  — except its config form shows all six holding registers (the two new
+  ones, calibration_c/pulses_per_rotation, only make sense on this tab and
+  Wind Speed) and its live-value area shows both a Speed group and a
+  Direction group side by side, since one poll of this build's 13-register
+  input block carries both sensors' data in one atomic snapshot.
+- Only one of the three wind tabs can poll at a time in v1 — same "one
+  target at a time" constraint as the original combined panel this whole
+  section replaced, just now expressed as "one *tab*, not one *field of a
+  shared panel*" (§9). Starting one tab's poll silently stops whichever of
+  the other two was running; the GUI corrects the other tabs' Start/Stop
+  buttons on the next status update rather than leaving them showing a
+  stale "running" state.
 - **Register Explorer** *(new — generic tool)* — manual single-shot request:
   address, FC (03/04/06/16), start register entered as a **raw 0-based
   address by default** (canonical, §5), with an optional Modicon 5-digit
@@ -410,18 +440,27 @@ and `wind` are new:
 // type: "scan" — pushed while a Bus Scanner sweep is running
 { "type": "scan", "current_addr": 37, "range_end": 247, "found": [1, 31, 44] }
 
-// type: "wind" — pushed while either Wind Speed or Wind Direction is
-// polling (only one at a time, §9); "sensor_type" tags which tab it's
-// for, and only that type's own fields are present (2026-07-02 split —
-// this used to be one shape carrying both sensor's fields at once).
-// gust_ms/seconds_since_pulse and dir_fault/raw_adc added 2026-07-02
-// once the DUT's TDS specified those registers (§5).
+// type: "wind" — pushed while one of Wind Speed / Wind Direction / Wind
+// Combined is polling (only one at a time, §9); "sensor_type" tags which
+// tab it's for. speed/direction each carry only that type's own fields
+// (2026-07-02 split — this used to be one shape carrying both sensors'
+// fields at once). gust_ms/seconds_since_pulse and dir_fault/raw_adc
+// added 2026-07-02 once the DUT's TDS specified those registers (§5).
+// "combined" (added 2026-07-11) is the union of both shapes below, same
+// field names — it's not the same thing as the pre-split shared shape:
+// this is one physical DUT whose own register map genuinely carries both
+// sensors' data, not two devices' data merged for convenience.
 { "type": "wind", "sensor_type": "speed", "has_data": true,
   "speed_instant_ms": 4.2, "speed_avg_ms": 3.9, "raw_pulses": 27,
   "gust_ms": 6.5, "seconds_since_pulse": 8, "age_ms": 420 }
 { "type": "wind", "sensor_type": "direction", "has_data": true,
   "dir_instant_deg": 183.4, "dir_avg_deg": 181.0, "dir_fault": false,
   "raw_adc": 512, "age_ms": 420 }
+{ "type": "wind", "sensor_type": "combined", "has_data": true,
+  "speed_instant_ms": 4.2, "speed_avg_ms": 3.9, "raw_pulses": 30,
+  "gust_ms": 6.5, "seconds_since_pulse": 8,
+  "dir_instant_deg": 182.8, "dir_avg_deg": 181.0, "dir_fault": false,
+  "raw_adc": 520, "age_ms": 420 }
 
 // type: "log" / "log_clear" — unchanged from template
 ```
@@ -438,7 +477,8 @@ and `wind` are new:
 | `scan_range_start` / `scan_range_end` | u8 | 1 / 247 | Last-used scan range |
 | `wind_speed_addr` | u8 | 30 | Last-used Wind Speed target (was one shared `wind_test_addr` before the 2026-07-02 split) |
 | `wind_dir_addr` | u8 | 31 | Last-used Wind Direction target |
-| `wind_poll_interval_ms` | u32 | 1000 | Poll cadence, shared by both wind tabs — no reason a bench tool needs a different cadence per sensor type |
+| `wind_comb_addr` | u8 | 32 | Last-used Wind Combined target, added 2026-07-11 |
+| `wind_poll_ms` | u32 | 1000 | Poll cadence, shared by all three wind tabs — no reason a bench tool needs a different cadence per sensor type. Shortened from `wind_poll_interval_ms` (21 chars, over the 15-char NVS key limit — `cfg_keys.h`) |
 
 ## 8. Development sequence
 

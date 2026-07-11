@@ -17,7 +17,7 @@
 #include "wind_poll.h"
 
 /**
- * @brief All 4 holding registers, decoded (TDS §2.8) — same 4 fields at
+ * @brief All 6 holding registers, decoded (TDS §2.8) — same 6 fields at
  * the same addresses regardless of sensor type (FR-MB27); which ones are
  * functionally meaningful for a given build is a GUI-layer concern now,
  * not a wire-protocol one (unlike before TDS v0.6, when the register
@@ -25,10 +25,12 @@
  * — that register no longer exists (FR-MB07/FR-MB26).
  */
 typedef struct {
-    float    dir_offset_deg;        /**< Holding reg 0x0000 (40001), 0.1°. */
-    uint16_t measurement_window_ms; /**< Holding reg 0x0001 (40002), ms. */
-    uint16_t averaging_window_s;    /**< Holding reg 0x0002 (40003), s. */
-    float    low_speed_cutoff_ms;   /**< Holding reg 0x0003 (40004), 0.1 m/s. */
+    float    dir_offset_deg;          /**< Holding reg 0x0000 (40001), 0.1°. */
+    uint16_t measurement_window_ms;   /**< Holding reg 0x0001 (40002), ms. */
+    uint16_t averaging_window_s;      /**< Holding reg 0x0002 (40003), s. */
+    float    low_speed_cutoff_ms;     /**< Holding reg 0x0003 (40004), 0.1 m/s. */
+    float    calibration_c_m_per_rot; /**< Holding reg 0x0004 (40005), m/rotation (raw is 0.001 m/rotation, TDS FR-S40) — inert on a direction-only build. */
+    uint16_t pulses_per_rotation;     /**< Holding reg 0x0005 (40006), unscaled pulses/rotation (TDS FR-S40) — inert on a direction-only build. */
 } wind_config_t;
 
 /** @brief Start the task. modbus_master_task_start() must already have run. */
@@ -36,9 +38,11 @@ void wind_poll_task_start(void);
 
 /**
  * @brief Start (or retarget) polling @p addr as sensor @p type, or stop
- * entirely. Only one target is ever active at a time (scratchbook.md §9 —
- * multi-device dashboard deferred to v2) — starting a WindSpeed poll while
- * WindDirection is active stops WindDirection, and vice versa.
+ * entirely. Only one target is ever active at a time regardless of how
+ * many types exist (scratchbook.md §9 — multi-device dashboard deferred to
+ * v2) — starting a poll of any one type (speed/direction/combined) stops
+ * whichever of the other two was active, since they all share this same
+ * single s_active_type/s_target_addr pair.
  * @param addr   Slave address to poll, 1-247. Ignored (but still stored)
  *               when @p active is false.
  * @param type   Sensor type @p addr is built as; selects which fields of
@@ -64,9 +68,9 @@ bool wind_poll_has_data(void);
 uint32_t wind_poll_age_ms(void);
 
 /**
- * @brief Bulk FC03 read of all 4 holding registers, decoded (TDS §2.8).
+ * @brief Bulk FC03 read of all 6 holding registers, decoded (TDS §2.8).
  * No @p type parameter — the register block is identical regardless of
- * sensor type as of TDS v0.6 (FR-MB27). Blocks on the real transaction.
+ * sensor type (FR-MB27). Blocks on the real transaction.
  * @param addr Slave address to read, 1-247.
  * @param out  Destination for the decoded config. Caller-owned; only
  *             written on success — left untouched if this returns false.

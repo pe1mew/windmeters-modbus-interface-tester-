@@ -96,13 +96,15 @@ int web_core_build_scan_json(char *out, size_t out_size, const bus_scan_status_t
 }
 
 /**
- * @brief wind_sensor_type_t -> its JSON "sensor_type" string ("speed"/"direction").
+ * @brief wind_sensor_type_t -> its JSON "sensor_type" string ("speed"/"direction"/"combined").
  * @param type Sensor type to name.
  * @return Static string literal; never NULL.
  */
 static const char *wind_sensor_type_name(wind_sensor_type_t type)
 {
-    return (type == WIND_SENSOR_SPEED) ? "speed" : "direction";
+    if (type == WIND_SENSOR_SPEED)     return "speed";
+    if (type == WIND_SENSOR_DIRECTION) return "direction";
+    return "combined";
 }
 
 int web_core_build_wind_json(char *out, size_t out_size, wind_sensor_type_t type,
@@ -122,13 +124,32 @@ int web_core_build_wind_json(char *out, size_t out_size, wind_sensor_type_t type
             (unsigned)reading->raw_diagnostic, (double)reading->gust_ms,
             (unsigned)reading->seconds_since_pulse, (unsigned)age_ms);
     }
+    if (type == WIND_SENSOR_DIRECTION) {
+        return snprintf(out, out_size,
+            "{\"type\":\"wind\",\"sensor_type\":\"direction\",\"has_data\":true,"
+            "\"dir_instant_deg\":%.1f,\"dir_avg_deg\":%.1f,\"dir_fault\":%s,"
+            "\"raw_adc\":%u,\"age_ms\":%u}",
+            (double)reading->dir_instant_deg, (double)reading->dir_avg_deg,
+            reading->dir_fault ? "true" : "false",
+            (unsigned)reading->raw_diagnostic, (unsigned)age_ms);
+    }
+    /* Combined: union of the speed and direction shapes above, same key
+     * names — "raw_pulses"/"gust_ms"/"seconds_since_pulse" mean the same
+     * thing they do in the speed message; "raw_adc" the same thing it
+     * does in the direction message (it just comes off a different wire
+     * register, 30013 instead of 30005, on this build — TDS §2.7). */
     return snprintf(out, out_size,
-        "{\"type\":\"wind\",\"sensor_type\":\"direction\",\"has_data\":true,"
+        "{\"type\":\"wind\",\"sensor_type\":\"combined\",\"has_data\":true,"
+        "\"speed_instant_ms\":%.1f,\"speed_avg_ms\":%.1f,"
+        "\"raw_pulses\":%u,\"gust_ms\":%.1f,\"seconds_since_pulse\":%u,"
         "\"dir_instant_deg\":%.1f,\"dir_avg_deg\":%.1f,\"dir_fault\":%s,"
         "\"raw_adc\":%u,\"age_ms\":%u}",
+        (double)reading->speed_instant_ms, (double)reading->speed_avg_ms,
+        (unsigned)reading->raw_diagnostic, (double)reading->gust_ms,
+        (unsigned)reading->seconds_since_pulse,
         (double)reading->dir_instant_deg, (double)reading->dir_avg_deg,
         reading->dir_fault ? "true" : "false",
-        (unsigned)reading->raw_diagnostic, (unsigned)age_ms);
+        (unsigned)reading->dir_raw_adc, (unsigned)age_ms);
 }
 
 int web_core_build_status_json(char *out, size_t out_size,
@@ -396,13 +417,28 @@ int web_core_build_api_wind_json(char *out, size_t out_size, uint8_t target, win
             (unsigned)reading->raw_diagnostic, (double)reading->gust_ms,
             (unsigned)reading->seconds_since_pulse, (unsigned)age_ms);
     }
+    if (type == WIND_SENSOR_DIRECTION) {
+        return snprintf(out, out_size,
+            "{\"ok\":true,\"has_data\":true,\"target\":%u,\"sensor_type\":\"direction\","
+            "\"dir_instant_deg\":%.1f,\"dir_avg_deg\":%.1f,\"dir_fault\":%s,"
+            "\"raw_adc\":%u,\"age_ms\":%u}",
+            target, (double)reading->dir_instant_deg, (double)reading->dir_avg_deg,
+            reading->dir_fault ? "true" : "false",
+            (unsigned)reading->raw_diagnostic, (unsigned)age_ms);
+    }
+    /* Combined: same union-of-fields convention as web_core_build_wind_json(). */
     return snprintf(out, out_size,
-        "{\"ok\":true,\"has_data\":true,\"target\":%u,\"sensor_type\":\"direction\","
+        "{\"ok\":true,\"has_data\":true,\"target\":%u,\"sensor_type\":\"combined\","
+        "\"speed_instant_ms\":%.1f,\"speed_avg_ms\":%.1f,"
+        "\"raw_pulses\":%u,\"gust_ms\":%.1f,\"seconds_since_pulse\":%u,"
         "\"dir_instant_deg\":%.1f,\"dir_avg_deg\":%.1f,\"dir_fault\":%s,"
         "\"raw_adc\":%u,\"age_ms\":%u}",
-        target, (double)reading->dir_instant_deg, (double)reading->dir_avg_deg,
+        target, (double)reading->speed_instant_ms, (double)reading->speed_avg_ms,
+        (unsigned)reading->raw_diagnostic, (double)reading->gust_ms,
+        (unsigned)reading->seconds_since_pulse,
+        (double)reading->dir_instant_deg, (double)reading->dir_avg_deg,
         reading->dir_fault ? "true" : "false",
-        (unsigned)reading->raw_diagnostic, (unsigned)age_ms);
+        (unsigned)reading->dir_raw_adc, (unsigned)age_ms);
 }
 
 int web_core_format_uptime_hhmmss(char *out, size_t out_size, uint32_t uptime_ms)

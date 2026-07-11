@@ -46,21 +46,27 @@ int web_core_build_scan_json(char *out, size_t out_size, const bus_scan_status_t
 /**
  * @brief Build the `type:"wind"` WebSocket payload.
  *
- * Wind speed and wind direction are physically separate units
- * (wind_poll.h) — this emits only the fields meaningful for @p type
- * (speed_instant_ms/speed_avg_ms/raw_pulses/gust_ms/seconds_since_pulse,
- * or dir_instant_deg/dir_avg_deg/dir_fault/raw_adc), tagged with
- * `"sensor_type"` so the GUI's two Wind tabs know which one an update
- * belongs to. Both branches decode from the same wind_reading_t (TDS
- * §2.7's register block is identical on both builds, FR-MB27) — the
- * split here is purely about which of its fields are worth surfacing to
- * that tab, not a wire-format difference.
+ * Wind speed, wind direction, and combined are (up to) three physically
+ * separate units (wind_poll.h) — this emits only the fields meaningful for
+ * @p type, tagged with `"sensor_type"` so the GUI's three Wind tabs know
+ * which one an update belongs to:
+ *   - speed:     speed_instant_ms/speed_avg_ms/raw_pulses/gust_ms/seconds_since_pulse
+ *   - direction: dir_instant_deg/dir_avg_deg/dir_fault/raw_adc
+ *   - combined:  every field above, in one message — the combined build's
+ *                register block carries both sensors' data (TDS §2.7), so
+ *                its message is the union rather than a third distinct
+ *                shape. Reuses the same key names ("raw_pulses"/"gust_ms"/
+ *                "seconds_since_pulse" for the speed side, "raw_adc" for
+ *                the direction side) so a client's field mapping stays
+ *                uniform across all three sensor_type values.
+ * All three branches decode from the same wind_reading_t — the split here
+ * is purely about which of its fields are worth surfacing to a given tab,
+ * not a wire-format difference.
  *
  * @param out       Destination buffer for the JSON text.
  * @param out_size  Capacity of @p out, including room for the null terminator.
- * @param type      Which of the two Wind tabs this update is for; selects
- *                   both the `"sensor_type"` tag and which reading fields
- *                   are emitted.
+ * @param type      Which Wind tab this update is for; selects both the
+ *                   `"sensor_type"` tag and which reading fields are emitted.
  * @param reading   Decoded snapshot to report; ignored (may be NULL) when
  *                   @p has_data is false.
  * @param has_data  false emits only `{"type":"wind","sensor_type":...,
@@ -313,8 +319,10 @@ int web_core_build_api_status_json(char *out, size_t out_size,
  * @param target       Slave address of the currently active Wind Test target;
  *                      only meaningful (and only emitted) when @p wind_active
  *                      is true.
- * @param type         Which sensor type @p target is (speed or direction);
- *                      selects which reading fields would be emitted.
+ * @param type         Which sensor type @p target is (speed, direction, or
+ *                      combined); selects which reading fields would be
+ *                      emitted — see web_core_build_wind_json() for the
+ *                      per-type field lists (combined is the union of both).
  * @param wind_active  false collapses straight to `{"ok":true,"has_data":
  *                      false}` regardless of @p reading/@p has_data — no
  *                      Wind Test target is configured at all.

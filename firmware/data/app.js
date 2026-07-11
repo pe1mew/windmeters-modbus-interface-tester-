@@ -145,14 +145,21 @@ function handleScan(s) {
   }
 }
 
-// ── Wind Speed / Wind Direction ─────────────────────────────────────────
-// Wind speed and wind direction are separate physical units (wind_poll.h)
-// with their own tab, but only one can poll at a time (wind_poll_task's
-// single s_active_type) — every helper here takes a 'speed'|'direction'
-// type and maps it to that tab's 'wspd-'/'wdir-' element prefix.
+// ── Wind Speed / Wind Direction / Wind Combined ──────────────────────────
+// Wind speed, wind direction, and combined are (up to) three separate
+// physical units (wind_poll.h), each with their own tab, but only one can
+// poll at a time (wind_poll_task's single s_active_type) — every helper
+// here takes a 'speed'|'direction'|'combined' type and maps it to that
+// tab's 'wspd-'/'wdir-'/'wcmb-' element prefix.
 function windPrefix(type) {
-  return (type === 'speed') ? 'wspd' : 'wdir';
+  if (type === 'speed')     return 'wspd';
+  if (type === 'direction') return 'wdir';
+  return 'wcmb';
 }
+
+// The three wind tab prefixes, for "disable every tab but the active one"
+// logic (handleWind, below) — one place to extend if a fourth ever shows up.
+const WIND_PREFIXES = ['wspd', 'wdir', 'wcmb'];
 
 function setWindButtons(prefix, active) {
   const btnStart = document.getElementById('btn-' + prefix + '-start');
@@ -178,7 +185,6 @@ function handleWind(w) {
   function fmt(v) { return (v === undefined || v === null) ? '—' : v.toFixed(1); }
 
   const activePrefix = windPrefix(w.sensor_type);
-  const otherPrefix   = (activePrefix === 'wspd') ? 'wdir' : 'wspd';
 
   if (w.sensor_type === 'speed') {
     setText('wspd-instant',     fmt(w.speed_instant_ms));
@@ -187,21 +193,35 @@ function handleWind(w) {
     setText('wspd-gust',        fmt(w.gust_ms));
     setText('wspd-since-pulse', w.seconds_since_pulse  !== undefined ? w.seconds_since_pulse  : '—');
     setText('wspd-age',         w.age_ms               !== undefined ? w.age_ms               : '—');
-  } else {
+  } else if (w.sensor_type === 'direction') {
     setText('wdir-instant', fmt(w.dir_instant_deg));
     setText('wdir-avg',     fmt(w.dir_avg_deg));
     setText('wdir-adc',     w.raw_adc !== undefined ? w.raw_adc : '—');
     setText('wdir-age',     w.age_ms  !== undefined ? w.age_ms  : '—');
     const faultEl = document.getElementById('wdir-fault');
     if (faultEl) faultEl.style.display = w.dir_fault ? 'inline-block' : 'none';
+  } else {
+    // Combined: union of the speed and direction fields above, same keys
+    // (see web_core_build_wind_json()'s doc comment) — populate both
+    // groups from the one message.
+    setText('wcmb-speed-instant', fmt(w.speed_instant_ms));
+    setText('wcmb-speed-avg',     fmt(w.speed_avg_ms));
+    setText('wcmb-pulses',        w.raw_pulses          !== undefined ? w.raw_pulses          : '—');
+    setText('wcmb-gust',          fmt(w.gust_ms));
+    setText('wcmb-since-pulse',   w.seconds_since_pulse !== undefined ? w.seconds_since_pulse : '—');
+    setText('wcmb-dir-instant',   fmt(w.dir_instant_deg));
+    setText('wcmb-dir-avg',       fmt(w.dir_avg_deg));
+    setText('wcmb-adc',           w.raw_adc             !== undefined ? w.raw_adc             : '—');
+    setText('wcmb-age',           w.age_ms              !== undefined ? w.age_ms              : '—');
+    const faultEl = document.getElementById('wcmb-fault');
+    if (faultEl) faultEl.style.display = w.dir_fault ? 'inline-block' : 'none';
   }
 
   // Only one sensor is ever actually polling — receiving an update for one
-  // type is proof the other tab's Start/Stop buttons are stale if they
+  // type is proof the other tabs' Start/Stop buttons are stale if they
   // still claim to be running (e.g. this client started Speed while
   // Direction's Stop button was left enabled from an earlier session).
-  setWindButtons(activePrefix, true);
-  setWindButtons(otherPrefix, false);
+  WIND_PREFIXES.forEach(p => setWindButtons(p, p === activePrefix));
 }
 
 function postWindConfigRead(type) {
@@ -213,14 +233,21 @@ function postWindConfigRead(type) {
       if (statusEl) statusEl.textContent = 'Read failed.';
       return;
     }
-    // All 4 holding registers exist identically on both builds (TDS §2.7
-    // FR-MB27) — the response always carries all 4; each tab just picks
-    // out the ones it shows.
+    // All 6 holding registers exist identically on every build (TDS
+    // §2.7/§2.8 FR-MB27) — the response always carries all 6; each tab
+    // just picks out the ones it shows. Only the Wind Combined tab shows
+    // every field; Speed/Direction each show their historical subset.
     if (type === 'speed') {
       document.getElementById('wspd-cfg-meas').value   = r.measurement_window_ms;
       document.getElementById('wspd-cfg-cutoff').value = r.low_speed_cutoff_ms;
-    } else {
+    } else if (type === 'direction') {
       document.getElementById('wdir-cfg-offset').value = r.dir_offset_deg;
+    } else {
+      document.getElementById('wcmb-cfg-offset').value = r.dir_offset_deg;
+      document.getElementById('wcmb-cfg-meas').value   = r.measurement_window_ms;
+      document.getElementById('wcmb-cfg-cutoff').value = r.low_speed_cutoff_ms;
+      document.getElementById('wcmb-cfg-calib').value  = r.calibration_c_m_per_rotation;
+      document.getElementById('wcmb-cfg-pulses').value = r.pulses_per_rotation;
     }
     document.getElementById(prefix + '-cfg-avg').value = r.averaging_window_s;
     if (statusEl) statusEl.textContent = 'Config read OK.';
@@ -231,12 +258,18 @@ function postWindConfigWrite(type, field) {
   const prefix = windPrefix(type);
   const addr   = parseInt(document.getElementById(prefix + '-addr').value, 10);
   // No device_addr case — that register no longer exists (TDS v0.6,
-  // FR-MB07/FR-MB26); the Modbus address is hardware-jumper only.
+  // FR-MB07/FR-MB26); the Modbus address is hardware-jumper only. Every
+  // field's input id follows '<prefix>-cfg-<suffix>' uniformly — the Wind
+  // Combined tab is the only one with all six wired up, but Speed/
+  // Direction reuse the same suffixes for the subset they show, so one
+  // map works for all three tabs.
   const fieldInputMap = {
-    dir_offset:           'wdir-cfg-offset',
-    measurement_window:   'wspd-cfg-meas',
+    dir_offset:           prefix + '-cfg-offset',
+    measurement_window:   prefix + '-cfg-meas',
     averaging_window:     prefix + '-cfg-avg',
-    low_speed_cutoff:     'wspd-cfg-cutoff',
+    low_speed_cutoff:     prefix + '-cfg-cutoff',
+    calibration_c:        prefix + '-cfg-calib',
+    pulses_per_rotation:  prefix + '-cfg-pulses',
   };
   const inputId  = fieldInputMap[field];
   const value    = parseFloat(document.getElementById(inputId).value);

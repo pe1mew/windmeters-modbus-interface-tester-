@@ -266,14 +266,14 @@ static void broadcast_scan_if_active(void)
     s_ws.textAll(json);
 }
 
-/** @brief Push the WebSocket `type:"wind"` payload for whichever sensor type wind_poll_task currently has active; a no-op when nothing is polling (only one of speed/direction can be active at a time). */
+/** @brief Push the WebSocket `type:"wind"` payload for whichever sensor type wind_poll_task currently has active; a no-op when nothing is polling (only one of speed/direction/combined can be active at a time). */
 static void broadcast_wind_if_active(void)
 {
     if (!wind_poll_is_active()) {
         return;
     }
     wind_reading_t reading = wind_poll_get_latest();
-    char json[256];
+    char json[384]; /* combined's union-of-fields payload runs ~260 bytes worst case; headroom past that, not an exact fit */
     web_core_build_wind_json(json, sizeof(json), wind_poll_get_active_type(),
                               &reading, wind_poll_has_data(), wind_poll_age_ms());
     s_ws.textAll(json);
@@ -394,25 +394,31 @@ static void register_scan_endpoints(void)
 }
 
 /**
- * @brief JSON `"type"` field ("speed"/"direction") -> wind_sensor_type_t. Defaults to WIND_SENSOR_SPEED for a missing/unrecognised value — same fail-open-to-a-defined-default convention as the rest of this file's o["field"] | default parsing.
+ * @brief JSON `"type"` field ("speed"/"direction"/"combined") -> wind_sensor_type_t. Defaults to WIND_SENSOR_SPEED for a missing/unrecognised value — same fail-open-to-a-defined-default convention as the rest of this file's o["field"] | default parsing.
  * @param type_str Raw JSON string value, possibly NULL.
- * @return WIND_SENSOR_DIRECTION only for an exact "direction" match; WIND_SENSOR_SPEED otherwise.
+ * @return WIND_SENSOR_DIRECTION for an exact "direction" match, WIND_SENSOR_COMBINED for an exact "combined" match; WIND_SENSOR_SPEED otherwise.
  */
 static wind_sensor_type_t parse_wind_sensor_type(const char *type_str)
 {
-    return (type_str && strcmp(type_str, "direction") == 0) ? WIND_SENSOR_DIRECTION : WIND_SENSOR_SPEED;
+    if (type_str && strcmp(type_str, "direction") == 0) return WIND_SENSOR_DIRECTION;
+    if (type_str && strcmp(type_str, "combined") == 0)  return WIND_SENSOR_COMBINED;
+    return WIND_SENSOR_SPEED;
 }
 
 /**
- * @brief NVS-stored default Modbus address for a wind sensor type (CFG_KEY_WIND_DIR_ADDR / CFG_KEY_WIND_SPEED_ADDR) — used whenever a request omits its own `addr` override.
+ * @brief NVS-stored default Modbus address for a wind sensor type (CFG_KEY_WIND_DIR_ADDR / CFG_KEY_WIND_SPEED_ADDR / CFG_KEY_WIND_COMBINED_ADDR) — used whenever a request omits its own `addr` override.
  * @param type Which sensor type's default address to look up.
  * @return The stored address, or the built-in default if NVS has never been written.
  */
 static uint8_t wind_default_addr(wind_sensor_type_t type)
 {
-    return (type == WIND_SENSOR_DIRECTION)
-        ? (uint8_t)cfg_get_u8(CFG_KEY_WIND_DIR_ADDR, CFG_DEFAULT_WIND_DIR_ADDR)
-        : (uint8_t)cfg_get_u8(CFG_KEY_WIND_SPEED_ADDR, CFG_DEFAULT_WIND_SPEED_ADDR);
+    if (type == WIND_SENSOR_DIRECTION) {
+        return (uint8_t)cfg_get_u8(CFG_KEY_WIND_DIR_ADDR, CFG_DEFAULT_WIND_DIR_ADDR);
+    }
+    if (type == WIND_SENSOR_COMBINED) {
+        return (uint8_t)cfg_get_u8(CFG_KEY_WIND_COMBINED_ADDR, CFG_DEFAULT_WIND_COMBINED_ADDR);
+    }
+    return (uint8_t)cfg_get_u8(CFG_KEY_WIND_SPEED_ADDR, CFG_DEFAULT_WIND_SPEED_ADDR);
 }
 
 /** @brief Register the human-GUI wind-poll routes: POST /wind/start, POST /wind/stop, POST /wind/config/read, POST /wind/config/write. */
@@ -426,6 +432,8 @@ static void register_wind_endpoints(void)
         uint32_t interval_ms = o["interval_ms"] | cfg_get_u32(CFG_KEY_WIND_POLL_INTERVAL, CFG_DEFAULT_WIND_POLL_INTERVAL);
         if (type == WIND_SENSOR_DIRECTION) {
             cfg_set_u8(CFG_KEY_WIND_DIR_ADDR, addr);
+        } else if (type == WIND_SENSOR_COMBINED) {
+            cfg_set_u8(CFG_KEY_WIND_COMBINED_ADDR, addr);
         } else {
             cfg_set_u8(CFG_KEY_WIND_SPEED_ADDR, addr);
         }
@@ -440,7 +448,7 @@ static void register_wind_endpoints(void)
         send_ok(request, true);
     });
 
-    // POST /wind/config/read — read all 4 holding registers (calibration config) from a wind unit and report them as a JSON object.
+    // POST /wind/config/read — read all 6 holding registers (calibration config) from a wind unit and report them as a JSON object.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/wind/config/read", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         wind_sensor_type_t type = parse_wind_sensor_type(o["type"] | "speed");
@@ -448,26 +456,31 @@ static void register_wind_endpoints(void)
         wind_config_t cfg_out;
         bool ok = wind_poll_read_config(addr, &cfg_out);
 
-        /* All 4 holding registers exist identically on both builds (TDS
-         * §2.7 FR-MB27) — always report all 4, same shape regardless of
-         * type; which ones a tab chooses to show is a GUI concern now,
+        /* All 6 holding registers exist identically on every build (TDS
+         * §2.7/§2.8 FR-MB27) — always report all 6, same shape regardless
+         * of type; which ones a tab chooses to show is a GUI concern now,
          * not a wire-protocol one. */
-        char buf[256];
+        char buf[320];
         if (ok) {
+            const char *type_name = (type == WIND_SENSOR_DIRECTION) ? "direction"
+                                   : (type == WIND_SENSOR_COMBINED)  ? "combined"
+                                   : "speed";
             snprintf(buf, sizeof(buf),
                      "{\"ok\":true,\"sensor_type\":\"%s\","
                      "\"dir_offset_deg\":%.1f,\"measurement_window_ms\":%u,"
-                     "\"averaging_window_s\":%u,\"low_speed_cutoff_ms\":%.1f}",
-                     (type == WIND_SENSOR_DIRECTION) ? "direction" : "speed",
+                     "\"averaging_window_s\":%u,\"low_speed_cutoff_ms\":%.1f,"
+                     "\"calibration_c_m_per_rotation\":%.3f,\"pulses_per_rotation\":%u}",
+                     type_name,
                      (double)cfg_out.dir_offset_deg, cfg_out.measurement_window_ms,
-                     cfg_out.averaging_window_s, (double)cfg_out.low_speed_cutoff_ms);
+                     cfg_out.averaging_window_s, (double)cfg_out.low_speed_cutoff_ms,
+                     (double)cfg_out.calibration_c_m_per_rot, cfg_out.pulses_per_rotation);
         } else {
             snprintf(buf, sizeof(buf), "{\"ok\":false}");
         }
         request->send(200, "application/json", buf);
     }));
 
-    // POST /wind/config/write — write a single named holding register (one of the 4 calibration fields) to a wind unit.
+    // POST /wind/config/write — write a single named holding register (one of the 6 calibration fields) to a wind unit.
     s_server.addHandler(new AsyncCallbackJsonWebHandler("/wind/config/write", [](AsyncWebServerRequest *request, JsonVariant &json) {
         JsonObject o = json.as<JsonObject>();
         wind_sensor_type_t type = parse_wind_sensor_type(o["type"] | "speed");
@@ -484,6 +497,8 @@ static void register_wind_endpoints(void)
         else if (strcmp(field_name, "measurement_window") == 0)   field = WIND_CFG_MEASUREMENT_WINDOW;
         else if (strcmp(field_name, "averaging_window") == 0)     field = WIND_CFG_AVERAGING_WINDOW;
         else if (strcmp(field_name, "low_speed_cutoff") == 0)     field = WIND_CFG_LOW_SPEED_CUTOFF;
+        else if (strcmp(field_name, "calibration_c") == 0)        field = WIND_CFG_CALIBRATION_C;
+        else if (strcmp(field_name, "pulses_per_rotation") == 0)  field = WIND_CFG_PULSES_PER_ROTATION;
         else { known = false; field = WIND_CFG_DIR_OFFSET; }
 
         bool ok = known && wind_poll_write_config_field(addr, field, value);
@@ -731,47 +746,56 @@ static void register_api_v1_endpoints(void)
     /* Hand-curated snapshot of the DUT's Technical Design Specification
      * (windmeters-modbus-interface/design/TDS.md §2.7/§2.8, v0.6) — not
      * derived from wind_poll.h automatically, so it has to be re-checked
-     * by hand whenever that TDS changes (last done 2026-07-02, when the
-     * TDS matured enough to specify this precisely and superseded this
-     * constant's previous, now-wrong, per-type-different-map assumption).
+     * by hand whenever that TDS changes (last done 2026-07-11, when the
+     * combined build's 13th input register and the anemometer calibration
+     * holding pair were added).
      * This is meant to help a client bootstrap, not be the source of
      * truth — the TDS is.
      *
-     * TDS v0.6 FR-MB27: both builds implement one *identical* 12-input/
-     * 4-holding register map at identical addresses — a register the
-     * active build doesn't use just reads 0, rather than the two builds
-     * having different maps (which is what this constant assumed before
-     * v0.6). So there's one "wind" map here, not a wind_speed/
-     * wind_direction split — "active_on" flags which build(s) a register
-     * carries real data on. There is no device-address register as of
-     * v0.6 (FR-MB07/FR-MB26) — the Modbus address is hardware-jumper only. */
+     * FR-MB27: every build implements the same register layout as far as
+     * it goes — a register the active build's sensor doesn't use just
+     * reads 0 — but the combined build's input map is one register longer
+     * (13 vs 12: adds 30013, the combined build's direction raw ADC, since
+     * 30005 is taken there by the speed pulse count). So there's one
+     * "wind" map here, not a per-type split — "active_on" flags which
+     * build(s) a register carries real data on. The holding map is
+     * uniform (6 registers) on every build; 40005/40006 (anemometer
+     * calibration) are inert but still present on a direction-only build,
+     * same as an inactive input register — "active_on" flags that too.
+     * There is no device-address register as of v0.6 (FR-MB07/FR-MB26) —
+     * the Modbus address is hardware-jumper only. */
     static const char DUT_REGISTER_SNAPSHOT_JSON[] =
         "{\"wind\":{\"input_registers\":["
-        "{\"addr\":0,\"name\":\"dir_instant\",\"unit\":\"0.1 deg\",\"active_on\":[\"direction\"]},"
-        "{\"addr\":1,\"name\":\"speed_instant\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\"]},"
-        "{\"addr\":2,\"name\":\"dir_avg\",\"unit\":\"0.1 deg\",\"active_on\":[\"direction\"]},"
-        "{\"addr\":3,\"name\":\"speed_avg\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\"]},"
-        "{\"addr\":4,\"name\":\"raw_diagnostic\",\"unit\":\"pulses (speed) or raw ADC (direction)\",\"active_on\":[\"speed\",\"direction\"]},"
-        "{\"addr\":5,\"name\":\"status_flags\",\"unit\":\"bitfield\",\"active_on\":[\"speed\",\"direction\"]},"
-        "{\"addr\":6,\"name\":\"identification\",\"unit\":\"build_type<<8|fw_version\",\"active_on\":[\"speed\",\"direction\"]},"
-        "{\"addr\":7,\"name\":\"uptime_s\",\"unit\":\"s\",\"active_on\":[\"speed\",\"direction\"]},"
-        "{\"addr\":8,\"name\":\"crc_error_count\",\"active_on\":[\"speed\",\"direction\"]},"
-        "{\"addr\":9,\"name\":\"served_request_count\",\"active_on\":[\"speed\",\"direction\"]},"
-        "{\"addr\":10,\"name\":\"seconds_since_pulse\",\"unit\":\"s\",\"active_on\":[\"speed\"]},"
-        "{\"addr\":11,\"name\":\"gust\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\"]}"
+        "{\"addr\":0,\"name\":\"dir_instant\",\"unit\":\"0.1 deg\",\"active_on\":[\"direction\",\"combined\"]},"
+        "{\"addr\":1,\"name\":\"speed_instant\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\",\"combined\"]},"
+        "{\"addr\":2,\"name\":\"dir_avg\",\"unit\":\"0.1 deg\",\"active_on\":[\"direction\",\"combined\"]},"
+        "{\"addr\":3,\"name\":\"speed_avg\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\",\"combined\"]},"
+        "{\"addr\":4,\"name\":\"raw_diagnostic\",\"unit\":\"pulses (speed/combined) or raw ADC (direction)\",\"active_on\":[\"speed\",\"direction\",\"combined\"]},"
+        "{\"addr\":5,\"name\":\"status_flags\",\"unit\":\"bitfield\",\"active_on\":[\"speed\",\"direction\",\"combined\"]},"
+        "{\"addr\":6,\"name\":\"identification\",\"unit\":\"build_type<<8|fw_version\",\"active_on\":[\"speed\",\"direction\",\"combined\"]},"
+        "{\"addr\":7,\"name\":\"uptime_s\",\"unit\":\"s\",\"active_on\":[\"speed\",\"direction\",\"combined\"]},"
+        "{\"addr\":8,\"name\":\"crc_error_count\",\"active_on\":[\"speed\",\"direction\",\"combined\"]},"
+        "{\"addr\":9,\"name\":\"served_request_count\",\"active_on\":[\"speed\",\"direction\",\"combined\"]},"
+        "{\"addr\":10,\"name\":\"seconds_since_pulse\",\"unit\":\"s\",\"active_on\":[\"speed\",\"combined\"]},"
+        "{\"addr\":11,\"name\":\"gust\",\"unit\":\"0.1 m/s\",\"active_on\":[\"speed\",\"combined\"]},"
+        "{\"addr\":12,\"name\":\"dir_raw_adc\",\"unit\":\"raw 10-bit ADC\",\"active_on\":[\"combined\"]}"
         "],\"holding_registers\":["
         "{\"addr\":0,\"name\":\"dir_offset\",\"unit\":\"0.1 deg\",\"range\":[0,3599]},"
         "{\"addr\":1,\"name\":\"measurement_window_ms\",\"range\":[100,60000]},"
         "{\"addr\":2,\"name\":\"averaging_window_s\",\"range\":[1,600]},"
-        "{\"addr\":3,\"name\":\"low_speed_cutoff\",\"unit\":\"0.1 m/s\",\"range\":[0,50]}"
+        "{\"addr\":3,\"name\":\"low_speed_cutoff\",\"unit\":\"0.1 m/s\",\"range\":[0,50]},"
+        "{\"addr\":4,\"name\":\"calibration_c\",\"unit\":\"0.001 m/rotation\",\"range\":[1,6553],\"active_on\":[\"speed\",\"combined\"]},"
+        "{\"addr\":5,\"name\":\"pulses_per_rotation\",\"range\":[1,1000],\"active_on\":[\"speed\",\"combined\"]}"
         "]}}";
 
     // GET /api/v1/spec — self-description (§5.1): endpoint list, status vocabulary, and the DUT_REGISTER_SNAPSHOT_JSON below, so a client that only knows the base URL can bootstrap without human-provided docs.
     s_server.on("/api/v1/spec", HTTP_GET, [](AsyncWebServerRequest *request) {
         /* 2048 silently truncated (invalid JSON) once the TDS v0.6 register
          * snapshot grew from 5+2 short entries to 12 input + 4 holding
-         * registers with verbose name/unit/active_on fields — 4096 leaves
-         * real headroom instead of just matching today's exact size. */
+         * registers with verbose name/unit/active_on fields; 4096 held up
+         * fine through the combined build's 13th input register and the
+         * calibration holding pair added 2026-07-11 — still real headroom
+         * past that, not an exact fit. */
         char buf[4096];
         web_core_build_api_spec_json(buf, sizeof(buf), DUT_REGISTER_SNAPSHOT_JSON);
         request->send(200, "application/json", buf);
@@ -795,11 +819,13 @@ static void register_api_v1_endpoints(void)
         request->send(200, "application/json", buf);
     });
 
-    // GET /api/v1/wind?type=speed|direction — cached reading for one sensor type (§5.5), sourced from wind_poll_task's cache rather than issuing a fresh bus read; "speed" is the default when the query param is omitted or unrecognised.
+    // GET /api/v1/wind?type=speed|direction|combined — cached reading for one sensor type (§5.5), sourced from wind_poll_task's cache rather than issuing a fresh bus read; "speed" is the default when the query param is omitted or unrecognised.
     s_server.on("/api/v1/wind", HTTP_GET, [](AsyncWebServerRequest *request) {
         wind_sensor_type_t type = WIND_SENSOR_SPEED;
-        if (request->hasParam("type") && request->getParam("type")->value() == "direction") {
-            type = WIND_SENSOR_DIRECTION;
+        if (request->hasParam("type")) {
+            const String &type_param = request->getParam("type")->value();
+            if      (type_param == "direction") type = WIND_SENSOR_DIRECTION;
+            else if (type_param == "combined")  type = WIND_SENSOR_COMBINED;
         }
         bool this_type_active = wind_poll_is_active() && wind_poll_get_active_type() == type;
         wind_reading_t reading = wind_poll_get_latest();

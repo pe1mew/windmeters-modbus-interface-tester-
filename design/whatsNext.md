@@ -4,8 +4,8 @@
 |--------------|-------------------------------------------|
 | Document     | Next Phases                               |
 | Project      | Windmeters Modbus Interface Tester        |
-| Date         | 2026-07-02 (updated)                      |
-| Status       | Phase 2.5 done; Phase 3 eight-of-nine done (INT-01/02/03/04/06/07/08/09 — §3.2); only INT-05 remains, blocked on the DUT firmware (Phase 4). Wind speed/direction split + GUI restructure done same day, after Phase 3's testing — see §2.5 |
+| Date         | 2026-07-11 (updated — combined build added, Phase 4's DUT-scaffolding blocker cleared) |
+| Status       | Phase 2.5 done; Phase 3 eight-of-nine done (INT-01/02/03/04/06/07/08/09 — §3.2); only INT-05 remains — no longer blocked on the DUT firmware existing (the DUT's own HIL suite now covers all three builds), but this project's own INT-05/INT-06 runs against a physical unit are still outstanding (Phase 4). Wind speed/direction split + GUI restructure done 2026-07-02, after Phase 3's testing (§2.5); Wind Combined tab + third build variant added 2026-07-11 |
 | Related docs | `design/progress.md` (what's done so far), `design/api.md` (Phase 2.5's spec), `design/completeRealisationPlan.md` §4 (Part C — Integration Test, the source table Phase 3 below reproduces), `design/realisationPlan.md` §4 (bring-up sequence, steps 3–5), `memory/gotcha-log.md` |
 
 ---
@@ -282,37 +282,48 @@ here rather than silently assumed.
 
 ## 4. Phase 4 — Real DUT verification
 
-**Blocked on:** `windmeters-modbus-interface`'s firmware implementing its
-register map. `software/firmware/src/main.c` is still scaffolding as of
-this writing (`git log` on that repo: HEAD = `3427df2 First scaffolding`)
-— there is nothing to test the Wind Speed/Direction decode against yet.
+**No longer blocked on the DUT firmware existing.** This section long said
+"blocked on `windmeters-modbus-interface`'s firmware implementing its
+register map... still scaffolding" — stale as of 2026-07-11:
+`windmeters-modbus-interface/software/hil/testReport.md` shows all three
+builds (speed, direction, combined) with an extensive, dated hardware
+integration-test history (e.g. `CMB-REG-01` — full register matrix on a
+real combined unit @ address 32, 77/77 assertions passing, 2026-07-08) run
+against real silicon on the DUT team's own bench. What this section still
+means, though, is **the tester's own INT-05/INT-06 acceptance tests
+(defined in `completeRealisationPlan.md`) haven't been run through this
+project's actual GUI/API against a physical unit** — the DUT team's HIL
+suite is a different test harness proving the DUT's firmware is correct,
+not a substitute for confirming *this tester* decodes/displays it
+correctly end to end. That confirmation is what the rest of this section
+still describes.
 
-Once unblocked, this now means **two** physical units to verify (§2.5),
-not one:
+This now means **three** physical unit variants to verify (§2.5), not two:
 
-1. Flash both DUT variants (or one, jumpered between addresses) with their
-   register-map firmware.
+1. Flash all three DUT variants (or one board, rejumpered between builds)
+   with their register-map firmware.
 2. Re-run `realisationPlan.md` §4 step 5: repeat bring-up steps 3/4 against
    the real DUT instead of the emulator.
-3. Run **INT-05** (Wind Speed and Wind Direction decode accuracy — two
-   passes, one per type) — the first time `wind_poll`'s ×10 scale-factor
-   decode is checked against real register values instead of
+3. Run **INT-05** (Wind Speed / Wind Direction / Wind Combined decode
+   accuracy — three passes, one per type) — the first time `wind_poll`'s
+   ×10 scale-factor decode, and the combined build's 13-register atomic
+   snapshot, are checked against real register values instead of
    hand-constructed native-test fixtures.
 4. Run the DUT-specific half of **INT-06** — holding-register config
    write-back via each type's own tab (Wind Speed: measurement window/
    averaging window/low-speed cutoff; Wind Direction: direction offset/
-   averaging window), not just the emulator's FG6485A stand-in. No
-   device-address case — TDS v0.6 (FR-MB07/FR-MB26) removed that register;
-   the slave address is hardware-jumpered only.
+   averaging window; Wind Combined: all six, including confirming
+   calibration_c/pulses_per_rotation persist across a DUT reset), not just
+   the emulator's FG6485A stand-in. No device-address case — TDS v0.6
+   (FR-MB07/FR-MB26) removed that register; the slave address is
+   hardware-jumpered only.
 5. **Regression pass whenever the DUT's register map changes upstream**
-   (`scratchbook.md` §8 step 13). The register map was noted as "4 commits
-   old and still moving" when this project started — re-check
-   `windmeters-modbus-interface/design/scratchBook.md` isn't stale before
-   trusting `wind_poll`'s register offsets again.
-
-This phase has no fixed start date — it starts whenever the DUT repo's
-firmware catches up. Worth checking that repo's state periodically rather
-than assuming it's still scaffolding indefinitely.
+   (`scratchbook.md` §8 step 13). Re-check
+   `windmeters-modbus-interface/design/TDS.md` isn't stale before trusting
+   `wind_poll`'s register offsets again — it moved twice already (the
+   physical-separation finding, then the v0.6 unification + combined
+   build), and the DUT team's own HIL suite is worth a periodic skim for
+   anything not yet reflected here.
 
 ---
 

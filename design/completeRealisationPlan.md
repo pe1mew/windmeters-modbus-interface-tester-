@@ -350,70 +350,83 @@ UART directly.
 
 ---
 
-#### TASK-WIND — Wind Speed / Wind Direction Poller
+#### TASK-WIND — Wind Speed / Wind Direction / Wind Combined Poller
 
 **Depends on:** TASK-MB
 **Depends on tasks:** TASK-MB running
 
-**Split 2026-07-02:** originally specified as one "Wind Test" poller
-targeting a single combined 5-input/4-holding register block. Reading the
-DUT's own hardware docs more closely showed wind speed and wind direction
-are physically separate units at separate addresses, each implementing
-only its own registers — not one device exposing both sensors together.
-The task below is now parameterised on a `wind_sensor_type_t`
-(`WIND_SENSOR_SPEED` / `WIND_SENSOR_DIRECTION`); only one type is ever
+**Split 2026-07-02, extended 2026-07-11:** originally specified as one
+"Wind Test" poller targeting a single combined 5-input/4-holding register
+block. Reading the DUT's own hardware docs more closely showed wind speed
+and wind direction are physically separate units at separate addresses.
+Once the DUT's TDS matured to v0.6, both single-sensor builds turned out to
+implement one *identical* 12-input/4-holding register layout (FR-MB27), not
+two different maps as first assumed. A third DUT build, **combined** (both
+sensors behind one slave address), arrived 2026-07-11 with a 13th input
+register (`dir_raw_adc`, since its `0x0004` carries the speed pulse count
+instead of the direction-only builds' raw ADC) and two new holding
+registers (anemometer calibration, uniform across every build). The task
+below is parameterised on a `wind_sensor_type_t` (`WIND_SENSOR_SPEED` /
+`WIND_SENSOR_DIRECTION` / `WIND_SENSOR_COMBINED`); only one type is ever
 polling at a time (same "one target" constraint as originally planned, now
 expressed per-type rather than per-field). Full register maps:
 `scratchbook.md` §5.
 
 **Implementation:**
 
-- While active for a given type and address (`wind_speed_addr` or
-  `wind_dir_addr`, NVS): polls that type's input registers — 3 registers
-  (`0x0000`–`0x0002`: speed_instant, speed_avg, raw_pulses) for
-  WIND_SENSOR_SPEED, 2 registers (`0x0000`–`0x0001`: dir_instant, dir_avg)
-  for WIND_SENSOR_DIRECTION — one FC04 call every `wind_poll_interval_ms`
-  (NVS, default 1000 ms, shared by both types).
+- While active for a given type and address (`wind_speed_addr` /
+  `wind_dir_addr` / `wind_comb_addr`, NVS): polls that type's full input
+  register block in one FC04 call — 12 registers (`0x0000`–`0x000B`) for
+  WIND_SENSOR_SPEED/WIND_SENSOR_DIRECTION, 13 (`0x0000`–`0x000C`) for
+  WIND_SENSOR_COMBINED — every `wind_poll_ms` (NVS, default 1000 ms, shared
+  by all three types). `wind_sensor_input_register_count(type)` resolves
+  the count so this task never hardcodes 12 or 13 — requesting 13 on a
+  single-sensor build would fail with exception 02 (its own map edge is
+  `0x000C`, FR-MB13).
 - Decodes with the DUT's ×10 scale factor — **not** the S200's ×1000
   (`scratchbook.md` §5 scaling gotcha) — into the fields that type's
-  firmware actually has; the other type's fields in the shared
-  `wind_reading_t` struct are left zeroed rather than split into two
-  struct types, to avoid cascading the split through every JSON
-  builder/GUI element for no behavioural benefit.
+  firmware actually has; fields the active build's sensor doesn't cover
+  come off the wire as 0 and are left that way, not specially zeroed. On
+  WIND_SENSOR_COMBINED, both the speed-side and direction-side fields (plus
+  `dir_raw_adc`, from the 13th register) are genuinely live from one atomic
+  FC04 snapshot — this isn't the pre-TDS "both fields, but only one type's
+  half is real" case the single-sensor builds still have.
 - Updates shared wind state under mutex; feeds the WebSocket `wind.*`
   fields (tagged `sensor_type`), including `age_ms` since the last
-  successful poll so the UI can show staleness.
-- On a config-read request: FC03 reads all 4 holding registers
-  (`0x0000`–`0x0003`) — identical addresses on both types as of the DUT's
-  TDS v0.6 (FR-MB27; earlier in this project each type had its own
-  register positions, and `wind_config_field_register()` took a `type`
-  parameter to resolve them — removed once the TDS settled on one shared
-  map, since there was nothing left for `type` to disambiguate). On a
-  config-write request: FC06 write-back of the single changed field —
-  never a blind FC16 of everything, so a typo in one field can't clobber
-  the others. There is no device-address field (TDS v0.6 removed that
-  register entirely, FR-MB07/FR-MB26); direction offset and low-speed
-  cutoff are exposed on their respective type's tab only, even though the
-  wire protocol accepts either write regardless of type.
-- Suspended (no polling, no bus traffic) when neither Wind tab is active;
-  switching which type is active (e.g. starting Speed while Direction was
+  successful poll so the UI can show staleness. The combined message is the
+  union of the speed and direction messages' fields, same key names, not a
+  fourth distinct shape (`web_core_build_wind_json()`).
+- On a config-read request: FC03 reads all 6 holding registers
+  (`0x0000`–`0x0005`) — identical addresses on every build (FR-MB27; grew
+  from 4 to 6 2026-07-11 for the anemometer calibration pair, uniformly,
+  not just on speed/combined builds). On a config-write request: FC06
+  write-back of the single changed field — never a blind FC16 of
+  everything, so a typo in one field can't clobber the others. There is no
+  device-address field (TDS v0.6 removed that register entirely,
+  FR-MB07/FR-MB26); which of the six fields a given tab's config form shows
+  is a GUI-layer choice (Wind Speed: measurement window/averaging
+  window/low-speed cutoff; Wind Direction: direction offset/averaging
+  window; Wind Combined: all six) — the wire protocol accepts any of the
+  six regardless of which tab is polling.
+- Suspended (no polling, no bus traffic) when no Wind tab is active;
+  switching which type is active (e.g. starting Combined while Speed was
   running) stops the previous type's polling — there is exactly one
-  `s_active_type`, not two independently-running pollers.
+  `s_active_type`, not three independently-running pollers.
 
 **Acceptance tests** (target):
 
 - `test_wind_poll_decodes_speed_registers_correctly` /
-  `test_wind_poll_decodes_direction_registers_correctly` — known register
-  values on the bench target (or a temporary mock slave, see §4); verify
-  e.g. raw `1834` → `183.4°`, and that decoding one type leaves the other
-  type's fields at zero
+  `test_wind_poll_decodes_direction_registers_correctly` /
+  `test_wind_poll_decodes_combined_fields_from_full_thirteen_register_block`
+  — known register values on the bench target (or a temporary mock slave,
+  see §4); verify e.g. raw `1834` → `183.4°`, that decoding a single-sensor
+  type leaves the other sensor's fields at zero, and that combined decodes
+  both sensors' fields plus `dir_raw_adc` from one 13-register block
 - `test_wind_poll_respects_interval`
 - `test_wind_config_write_fc06_single_field` — change only the offset;
-  verify exactly one FC06 frame is sent, for that register only, and that
-  writing a field that doesn't exist for the active type never touches
-  the wire
+  verify exactly one FC06 frame is sent, for that register only
 - `test_wind_poll_suspended_when_no_tab_active` — verify zero bus traffic
-  from this task while both tabs are closed
+  from this task while all three tabs are closed
 
 ---
 
@@ -496,7 +509,7 @@ it exercises real commercial firmware rather than a software stand-in.
 | INT-02 | Configure WiFi via AP-mode web UI | — | Device reconnects in STA mode; `windmeter-tester.local` resolves |
 | INT-03 | Full bus scan | FG6485A (address 1) | Bus Scanner reports the address; progress visible throughout |
 | INT-04 | Generic register read via Register Explorer | FG6485A | FC03 read of FG6485A registers returns values matching an independent read — validates FC03 mechanics and the Modicon-conversion path, independent of the DUT's register map |
-| INT-05 | Wind Speed / Wind Direction decode accuracy | Real DUT | **Blocked** (§6) — the FG6485A's registers use the wrong scale/layout to validate either DUT variant's decode (×10; 3 registers for Speed, 2 for Direction, `scratchbook.md` §5); this test can only be meaningful against the real DUT or a purpose-built mock of its exact register maps |
+| INT-05 | Wind Speed / Wind Direction / Wind Combined decode accuracy | Real DUT | **Blocked** (§6) — the FG6485A's registers use the wrong scale/layout to validate any DUT variant's decode (×10; 12-register single-sensor maps, 13 on combined, `scratchbook.md` §5); this test can only be meaningful against the real DUT or a purpose-built mock of its exact register maps |
 | INT-06 | Register Explorer write + read-back | FG6485A (alarm config, `0x000C`–`0x0013`) as a mechanics-only stand-in | FC16 write followed by FC03 read-back returns the written values — validates the write path generically; DUT-specific holding-register write-back (via the Wind Speed/Direction tabs' own config forms) is blocked the same way as INT-05 |
 | INT-07 | Modbus Log ordering | Either | TX and RX frames from a scan appear correctly interleaved and timestamped |
 | INT-08 | LED state transitions | Either | Idle → scanning → valid-frame/error states are visually correct and return to idle when the scan ends |

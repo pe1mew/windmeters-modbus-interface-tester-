@@ -29,13 +29,14 @@
 #define CFG_KEY_MB_RETRIES           "mb_retries" /**< NVS key: mb_core additional attempts after the first before a transaction is marked failed. */
 #define CFG_KEY_SCAN_RANGE_START     "scan_start" /**< NVS key: last-used Bus Scanner sweep start address. Shortened from "scan_range_start" (16 chars) — see file header. */
 #define CFG_KEY_SCAN_RANGE_END       "scan_end" /**< NVS key: last-used Bus Scanner sweep end address, paired with CFG_KEY_SCAN_RANGE_START. */
-/* Wind speed and wind direction are separate physical units with separate
- * addresses (wind_poll.h) — each tab remembers its own. Poll interval stays
- * shared: no reason a bench tool needs a different polling cadence per
- * sensor type. */
+/* Wind speed, wind direction, and combined are (up to) three separate
+ * physical units with separate addresses (wind_poll.h) — each tab
+ * remembers its own. Poll interval stays shared: no reason a bench tool
+ * needs a different polling cadence per sensor type. */
 #define CFG_KEY_WIND_SPEED_ADDR      "wind_speed_addr" /**< NVS key: last-used Wind Speed tab target slave address. Split off the old shared "wind_test_addr" 2026-07-02. */
 #define CFG_KEY_WIND_DIR_ADDR        "wind_dir_addr" /**< NVS key: last-used Wind Direction tab target slave address, independent of CFG_KEY_WIND_SPEED_ADDR. */
-#define CFG_KEY_WIND_POLL_INTERVAL   "wind_poll_ms" /**< NVS key: shared poll cadence (ms) for both wind tabs. Shortened from "wind_poll_interval_ms" (21 chars) — see file header. */
+#define CFG_KEY_WIND_COMBINED_ADDR   "wind_comb_addr" /**< NVS key: last-used Wind Combined tab target slave address, independent of the other two. Added 2026-07-11 with the combined build. */
+#define CFG_KEY_WIND_POLL_INTERVAL   "wind_poll_ms" /**< NVS key: shared poll cadence (ms) for all three wind tabs. Shortened from "wind_poll_interval_ms" (21 chars) — see file header. */
 
 #define CFG_DEFAULT_WIFI_SSID          "" /**< Default WiFi SSID — empty means AP-only until configured. */
 #define CFG_DEFAULT_WIFI_PASS          "" /**< Default WiFi password — empty, paired with CFG_DEFAULT_WIFI_SSID. */
@@ -47,4 +48,5 @@
 #define CFG_DEFAULT_SCAN_RANGE_END     247u /**< Default Bus Scanner sweep end — highest valid Modbus unit address (0 is broadcast, excluded). */
 #define CFG_DEFAULT_WIND_SPEED_ADDR    30u /**< Default Wind Speed tab target address. */
 #define CFG_DEFAULT_WIND_DIR_ADDR      31u /**< Default Wind Direction tab target address. */
-#define CFG_DEFAULT_WIND_POLL_INTERVAL 1000u /**< Default poll cadence, ms, shared by both wind tabs. */
+#define CFG_DEFAULT_WIND_COMBINED_ADDR 32u /**< Default Wind Combined tab target address (TDS FR-S03). */
+#define CFG_DEFAULT_WIND_POLL_INTERVAL 1000u /**< Default poll cadence, ms, shared by all three wind tabs. */

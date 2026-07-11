@@ -52,6 +52,7 @@
   <button class="tab-btn active" data-tab="scanner"   onclick="switchTab('scanner')">Bus Scanner</button>
   <button class="tab-btn"        data-tab="windspeed"  onclick="switchTab('windspeed')">Wind Speed</button>
   <button class="tab-btn"        data-tab="winddir"    onclick="switchTab('winddir')">Wind Direction</button>
+  <button class="tab-btn"        data-tab="windcomb"   onclick="switchTab('windcomb')">Wind Combined</button>
   <button class="tab-btn"        data-tab="explorer"   onclick="switchTab('explorer')">Register Explorer</button>
   <button class="tab-btn"        data-tab="settings"   onclick="switchTab('settings')">System Settings</button>
 </nav>
@@ -203,6 +204,101 @@
   </div>
   <button onclick="postWindConfigRead('direction')">Refresh config from device</button>
   <p id="wdir-config-status" class="hint"></p>
+</section>
+
+<!-- ── Wind Combined ───────────────────────────────────────────── -->
+<section class="tab-panel" id="tab-windcomb">
+  <h2>Wind Combined</h2>
+  <p class="hint">One physical unit serving both sensors behind a single slave address — slave address 32 (or 37 jumpered).</p>
+
+  <table class="reg-tbl">
+    <thead><tr><th>Register</th><th>Addr</th><th>Field</th><th>Scale</th></tr></thead>
+    <tbody>
+      <tr><td>Input (FC04)</td><td>0x0000</td><td>dir_instant</td><td>raw &divide;10 &deg;, 65535 = sensor fault</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0001</td><td>speed_instant</td><td>raw &divide;10 m/s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0002</td><td>dir_avg</td><td>raw &divide;10 &deg;, 65535 = sensor fault</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0003</td><td>speed_avg</td><td>raw &divide;10 m/s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0004</td><td>raw_pulses (last window)</td><td>unscaled</td></tr>
+      <tr><td>Input (FC04)</td><td>0x000A</td><td>seconds_since_pulse</td><td>unscaled s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x000B</td><td>gust (max in averaging window)</td><td>raw &divide;10 m/s</td></tr>
+      <tr><td>Input (FC04)</td><td>0x000C</td><td>dir_raw_adc (last conversion) — combined-only register</td><td>unscaled, 0-1023</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0000</td><td>dir_offset</td><td>raw &divide;10 &deg;, 0-3599</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0001</td><td>measurement_window</td><td>unscaled ms, 100-60000</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0002</td><td>averaging_window</td><td>unscaled s, 1-600</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0003</td><td>low_speed_cutoff</td><td>raw &divide;10 m/s, 0-50</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0004</td><td>calibration_c (anemometer)</td><td>raw &divide;1000 m/rotation, 1-6553 raw</td></tr>
+      <tr><td>Holding (FC03/06)</td><td>0x0005</td><td>pulses_per_rotation (anemometer)</td><td>unscaled, 1-1000</td></tr>
+    </tbody>
+  </table>
+  <p class="hint">13-input/6-holding register map (TDS &sect;2.7/&sect;2.8) — one register longer than
+    the single-sensor units' maps, since this build adds dir_raw_adc at 0x000C (the direction
+    reading's raw ADC moves here because 0x0004 is taken by the speed pulse count on this build).
+    The remaining diagnostics (status/identification/uptime/error-count) read here too and are
+    reachable via <a href="#" onclick="switchTab('explorer'); return false;">Register Explorer</a>.
+    No device-address register exists — the address is hardware-jumper only.</p>
+
+  <div class="row">
+    <label>Slave address</label>
+    <input type="number" id="wcmb-addr" min="1" max="247" value="32" class="short">
+    <label>Poll interval (ms)</label>
+    <input type="number" id="wcmb-interval" min="100" value="1000" class="short">
+    <button id="btn-wcmb-start" onclick="postWindStart('combined')">&#9654; Start</button>
+    <button id="btn-wcmb-stop" onclick="postWindStop('combined')" disabled>&#9632; Stop</button>
+  </div>
+  <p class="hint">Only one wind sensor can poll at a time — starting this stops Wind Speed / Wind Direction if either is running.</p>
+
+  <div class="grid4">
+    <div class="card">
+      <h3>Speed</h3>
+      <p>Instant: <strong id="wcmb-speed-instant">—</strong> m/s</p>
+      <p>Average: <strong id="wcmb-speed-avg">—</strong> m/s</p>
+      <p>Pulses: <strong id="wcmb-pulses">—</strong></p>
+      <p>Gust: <strong id="wcmb-gust">—</strong> m/s</p>
+      <p>Since last pulse: <strong id="wcmb-since-pulse">—</strong> s</p>
+    </div>
+    <div class="card">
+      <h3>Direction</h3>
+      <p>Instant: <strong id="wcmb-dir-instant">—</strong> &deg;</p>
+      <p>Average: <strong id="wcmb-dir-avg">—</strong> &deg;</p>
+      <p>ADC: <strong id="wcmb-adc">—</strong></p>
+      <span id="wcmb-fault" class="badge fault" style="display:none">Sensor fault</span>
+      <p>Age: <strong id="wcmb-age">—</strong> ms</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:.75rem">Config (holding registers)</h3>
+  <div class="row">
+    <label>Direction offset (&deg;)</label>
+    <input type="number" id="wcmb-cfg-offset" step="0.1" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('combined', 'dir_offset')">Write</button>
+  </div>
+  <div class="row">
+    <label>Measurement window (ms)</label>
+    <input type="number" id="wcmb-cfg-meas" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('combined', 'measurement_window')">Write</button>
+  </div>
+  <div class="row">
+    <label>Averaging window (s)</label>
+    <input type="number" id="wcmb-cfg-avg" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('combined', 'averaging_window')">Write</button>
+  </div>
+  <div class="row">
+    <label>Low-speed cutoff (m/s)</label>
+    <input type="number" id="wcmb-cfg-cutoff" step="0.1" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('combined', 'low_speed_cutoff')">Write</button>
+  </div>
+  <div class="row">
+    <label>Anemometer calibration C (m/rotation)</label>
+    <input type="number" id="wcmb-cfg-calib" step="0.001" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('combined', 'calibration_c')">Write</button>
+  </div>
+  <div class="row">
+    <label>Anemometer pulses/rotation</label>
+    <input type="number" id="wcmb-cfg-pulses" step="1" min="1" max="1000" class="short">
+    <button class="btn-sm" onclick="postWindConfigWrite('combined', 'pulses_per_rotation')">Write</button>
+  </div>
+  <button onclick="postWindConfigRead('combined')">Refresh config from device</button>
+  <p id="wcmb-config-status" class="hint"></p>
 </section>
 
 <!-- ── Register Explorer ───────────────────────────────────────── -->
