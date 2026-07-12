@@ -10,6 +10,24 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The GUI's Modbus Log table showed elapsed time-since-boot (`HH:MM:SS`)
+  instead of real wall-clock time, even once NTP was synced — the
+  WebSocket `type:"log"` broadcast (`broadcast_one_log_entry()`) never
+  checked NTP sync state, unlike its sibling `web_core_build_api_log_json()`
+  (`/api/v1/log`). Fixed via a new `web_core_format_log_entry_timestamp()`:
+  real UTC ISO-8601 (`"2026-07-12T08:05:05Z"`) once synced, same
+  elapsed-uptime fallback as before otherwise. The firmware still emits
+  bare UTC — no timezone-offset logic added on that side (the POSIX-TZ
+  mechanism was found dead and removed earlier in this project); the GUI's
+  new `fmtLogTimestamp()` converts to the viewer's own local time
+  (CET/CEST or whatever the browser's timezone is) via
+  `Date`/`toLocaleTimeString`, detecting which shape it received by the
+  presence of a literal `T`. Verified live: captured a real WS `type:"log"`
+  frame post-sync (`"ts":"2026-07-12T08:05:05Z"`) and confirmed the
+  rendered table cell read `10:06:34` (Europe/Amsterdam CEST).
+
 ## [0.5.0] - 2026-07-12
 
 ### Changed

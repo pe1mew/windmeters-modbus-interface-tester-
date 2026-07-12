@@ -729,6 +729,44 @@ void test_format_uptime_hhmmss_zero(void)
     TEST_ASSERT_EQUAL_STRING("00:00:00", buf);
 }
 
+/* ── log-entry timestamp (GUI Modbus Log's WS broadcast — the bug this
+ *    group guards against: the WS path used to always show elapsed
+ *    HH:MM:SS, never real wall-clock time, even once NTP was synced) ── */
+
+void test_log_entry_timestamp_falls_back_to_uptime_when_not_synced(void)
+{
+    /* setUp() already calls ntp_manager_reset() before every test. */
+    char buf[32];
+    web_core_format_log_entry_timestamp(buf, sizeof(buf), 3723000u);
+    TEST_ASSERT_EQUAL_STRING("01:02:03", buf);
+}
+
+void test_log_entry_timestamp_uses_iso8601_when_synced(void)
+{
+    /* Same known conversion as test_api_log_json_uses_iso8601_when_synced:
+     * sync at millis()=1000 <-> epoch 1700000000; an entry logged 43000ms
+     * converts to epoch 1700000042 -> 2023-11-14T22:14:02Z. */
+    ntp_manager_record_sync(1000, 1700000000);
+    char buf[32];
+    web_core_format_log_entry_timestamp(buf, sizeof(buf), 43000u);
+    TEST_ASSERT_EQUAL_STRING("2023-11-14T22:14:02Z", buf);
+}
+
+void test_log_entry_timestamp_shapes_are_distinguishable_by_a_literal_T(void)
+{
+    /* app.js's fmtLogTimestamp() tells the two shapes apart by checking
+     * for a literal 'T' — this test guards that contract directly, not
+     * just the individual shapes above. */
+    char not_synced[32];
+    web_core_format_log_entry_timestamp(not_synced, sizeof(not_synced), 5000u);
+    TEST_ASSERT_NULL(strchr(not_synced, 'T'));
+
+    ntp_manager_record_sync(1000, 1700000000);
+    char synced[32];
+    web_core_format_log_entry_timestamp(synced, sizeof(synced), 43000u);
+    TEST_ASSERT_NOT_NULL(strchr(synced, 'T'));
+}
+
 /* ── machine API — POST/GET /api/v1/scan JSON, api.md §5.3 ── */
 
 void test_api_scan_json_scanning_shape(void)
@@ -855,5 +893,8 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_format_uptime_hhmmss_basic);
     RUN_TEST(test_format_uptime_hhmmss_hours_can_exceed_24);
     RUN_TEST(test_format_uptime_hhmmss_zero);
+    RUN_TEST(test_log_entry_timestamp_falls_back_to_uptime_when_not_synced);
+    RUN_TEST(test_log_entry_timestamp_uses_iso8601_when_synced);
+    RUN_TEST(test_log_entry_timestamp_shapes_are_distinguishable_by_a_literal_T);
     return UNITY_END();
 }

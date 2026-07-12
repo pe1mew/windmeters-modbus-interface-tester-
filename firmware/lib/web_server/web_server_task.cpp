@@ -313,7 +313,13 @@ static void broadcast_interface_if_active(void)
 
 /**
  * @brief Push one WebSocket `type:"log"` payload for a single TX or RX traffic-log entry.
- * @param entry Log entry to broadcast; its raw bytes are hex-encoded and its timestamp reformatted to HH:MM:SS for the GUI table (see the `ts_buf` comment below for why this differs from /api/v1/log's own timestamp contract).
+ * @param entry Log entry to broadcast; its raw bytes are hex-encoded and its
+ *              timestamp resolved via web_core_format_log_entry_timestamp()
+ *              — real UTC ISO-8601 once NTP is synced (the GUI converts
+ *              that to the viewer's own local time for display), elapsed
+ *              HH:MM:SS before that. Distinct from /api/v1/log's own
+ *              raw-ms + `"clock":"uptime"` contract for machine clients
+ *              (design/api.md §3).
  */
 static void broadcast_one_log_entry(const mb_log_entry_t *entry)
 {
@@ -323,11 +329,8 @@ static void broadcast_one_log_entry(const mb_log_entry_t *entry)
         hex_len += (size_t)snprintf(hex + hex_len, sizeof(hex) - hex_len, "%02X ", entry->raw[i]);
     }
 
-    /* HH:MM:SS for the GUI table — /api/v1/log keeps its own raw-ms
-     * "clock":"uptime" contract for machine clients (design/api.md §3);
-     * this is the human-display sibling, GUI-side only per that scoping. */
-    char ts_buf[12];
-    web_core_format_uptime_hhmmss(ts_buf, sizeof(ts_buf), entry->timestamp_ms);
+    char ts_buf[32]; /* room for the ISO-8601 "YYYY-MM-DDTHH:MM:SSZ" shape, not just HH:MM:SS */
+    web_core_format_log_entry_timestamp(ts_buf, sizeof(ts_buf), entry->timestamp_ms);
 
     char json[512];
     snprintf(json, sizeof(json),

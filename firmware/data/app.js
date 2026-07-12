@@ -373,12 +373,28 @@ function postModbusSettings() {
 // ── Modbus log ───────────────────────────────────────────────────────────
 const LOG_MAX = 50;
 
+// entry.ts is either a real UTC ISO-8601 timestamp (once NTP is synced —
+// always contains 'T', e.g. "2026-07-12T14:32:07Z") or a bare elapsed
+// HH:MM:SS-since-boot string (not yet synced — never contains 'T'). The
+// firmware deliberately carries no timezone-offset logic of its own (see
+// web_core_format_log_entry_timestamp()'s doc comment) — converting the
+// ISO-8601 case to the viewer's own local time (CET/CEST or whatever the
+// browser's own timezone is) happens here, since the browser already knows
+// it and the firmware doesn't need to.
+function fmtLogTimestamp(ts) {
+  if (!ts) return '';
+  if (ts.indexOf('T') === -1) return ts; // not yet synced: already HH:MM:SS
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return ts; // defensive: unparseable, show the raw string
+  return d.toLocaleTimeString(undefined, { hour12: false });
+}
+
 function appendLog(entry) {
   const tbody = document.getElementById('log-body');
   if (!tbody) return;
   const tr = document.createElement('tr');
   tr.innerHTML =
-    '<td>' + esc(entry.ts      || '') + '</td>' +
+    '<td>' + esc(fmtLogTimestamp(entry.ts)) + '</td>' +
     '<td>' + esc(entry.dir     || '') + '</td>' +
     '<td><code>' + esc(entry.hex || '') + '</code></td>' +
     '<td>' + esc(entry.summary || '') + '</td>';

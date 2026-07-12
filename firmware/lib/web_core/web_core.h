@@ -391,9 +391,11 @@ int web_core_build_api_log_json(char *out, size_t out_size, const mb_log_entry_t
 /**
  * @brief Format an uptime-millis value as "HH:MM:SS" (hours can exceed 24).
  *
- * Used for the GUI's Modbus Log table — `/api/v1/log` (above) keeps its own
- * raw-ms + `"clock":"uptime"` contract for machine clients (design/api.md
- * §3); this is the human-display sibling, GUI-side only per that scoping.
+ * The not-yet-NTP-synced fallback for the GUI's Modbus Log table — see
+ * web_core_format_log_entry_timestamp(), which is what the table's WS
+ * `type:"log"` broadcast actually calls; this function is its own
+ * building block for the "no wall-clock reference point yet" case, and is
+ * also usable standalone wherever a bare elapsed-time display is wanted.
  * @param out       Destination buffer for the formatted string.
  * @param out_size  Capacity of @p out, including room for the null terminator.
  * @param uptime_ms Milliseconds since boot to format, e.g. an
@@ -403,6 +405,34 @@ int web_core_build_api_log_json(char *out, size_t out_size, const mb_log_entry_t
  *         when @p out_size >= 9.
  */
 int web_core_format_uptime_hhmmss(char *out, size_t out_size, uint32_t uptime_ms);
+
+/**
+ * @brief Timestamp string for one Modbus Log GUI table row.
+ *
+ * Once NTP is synced: real UTC time in ISO-8601
+ * (`"2026-07-12T14:32:07Z"`) — same "convert this entry's own stored
+ * timestamp_ms via the recorded sync reference point" approach as
+ * web_core_build_api_log_json()'s per-entry `ts` field (design/api.md §3),
+ * not "now", since these are historical log entries. The GUI (`app.js`)
+ * converts this to the viewer's own local timezone for display (e.g. CET/
+ * CEST) — this firmware deliberately carries no timezone-offset logic of
+ * its own (the POSIX-TZ mechanism the template shipped with was found
+ * dead/unused and removed early in this project; see
+ * `memory/gotcha-log.md`), so a browser that already knows the viewer's
+ * timezone is where that conversion belongs, not here.
+ *
+ * Before NTP sync: falls back to web_core_format_uptime_hhmmss() — there's
+ * no wall-clock reference point yet to convert @p timestamp_ms against.
+ * The two shapes are distinguishable by the caller/frontend: the ISO-8601
+ * case always contains a literal `T`, the HH:MM:SS fallback never does.
+ *
+ * @param out          Destination buffer for the formatted string.
+ * @param out_size     Capacity of @p out, including room for the null terminator.
+ * @param timestamp_ms The entry's stored millis-at-log-time value (an
+ *                      mb_log_entry_t.timestamp_ms value).
+ * @return Number of bytes written (excluding the null terminator), matching snprintf's convention.
+ */
+int web_core_format_log_entry_timestamp(char *out, size_t out_size, uint32_t timestamp_ms);
 
 /**
  * @brief Build `POST`/`GET /api/v1/scan`'s response JSON (design/api.md §5.3).

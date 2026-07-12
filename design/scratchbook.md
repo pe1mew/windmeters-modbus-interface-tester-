@@ -478,7 +478,21 @@ is gone, §3); `status`, `log`, and `log_clear` carry over unchanged; `scan`,
   "crc_error_count": 0, "served_request_count": 812, "has_data": true,
   "age_ms": 340 }
 
-// type: "log" / "log_clear" — unchanged from template
+// type: "log" — "ts" is real UTC ISO-8601 once NTP is synced (2026-07-12
+// fix: the WS broadcast used to always show elapsed-since-boot HH:MM:SS,
+// never real wall-clock time, even after sync — see
+// web_core_format_log_entry_timestamp()). Before sync: falls back to
+// HH:MM:SS uptime, same shape as before. The two are distinguished by a
+// literal 'T' (ISO-8601 always has one, HH:MM:SS never does) — app.js's
+// fmtLogTimestamp() uses that to decide whether to convert to the
+// viewer's own local time via Date/toLocaleTimeString, otherwise passes
+// the uptime string through unchanged. Distinct from /api/v1/log's own
+// raw-ms + "clock":"uptime" contract for machine clients (design/api.md §3).
+{ "type": "log", "ts": "2026-07-12T08:05:05Z", "dir": "TX",
+  "hex": "20 04 00 00 00 02 77 7A ",
+  "summary": "FC04 addr32 start0x0000 cnt2 -> OK" }
+
+// type: "log_clear" — unchanged from template
 ```
 
 ### NVS keys

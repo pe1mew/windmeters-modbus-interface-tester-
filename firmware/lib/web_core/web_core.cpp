@@ -474,6 +474,22 @@ int web_core_format_uptime_hhmmss(char *out, size_t out_size, uint32_t uptime_ms
     return snprintf(out, out_size, "%02u:%02u:%02u", (unsigned)h, (unsigned)m, (unsigned)s);
 }
 
+int web_core_format_log_entry_timestamp(char *out, size_t out_size, uint32_t timestamp_ms)
+{
+    if (!ntp_manager_is_synced()) {
+        return web_core_format_uptime_hhmmss(out, out_size, timestamp_ms);
+    }
+    /* Same per-entry millis-at-log-time -> epoch conversion as
+     * web_core_build_api_log_json() (design/api.md §3) — this entry's own
+     * stored timestamp, not "now". */
+    time_t epoch = (time_t)ntp_manager_millis_to_epoch(timestamp_ms);
+    struct tm tm_val;
+    gmtime_portable(epoch, &tm_val);
+    return snprintf(out, out_size, "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                     tm_val.tm_year + 1900, tm_val.tm_mon + 1, tm_val.tm_mday,
+                     tm_val.tm_hour, tm_val.tm_min, tm_val.tm_sec);
+}
+
 int web_core_build_api_log_json(char *out, size_t out_size, const mb_log_entry_t *entries, size_t count)
 {
     int n = snprintf(out, out_size, "{\"ok\":true,\"entries\":[");
