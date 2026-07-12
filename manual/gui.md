@@ -29,8 +29,9 @@ the bottom).
 The page has three fixed regions, top to bottom:
 
 1. **Status** — always visible, never scrolls out of view behind a tab.
-2. **Tab bar** — Bus Scanner, Wind Speed, Wind Direction, Register
-   Explorer, System Settings. Click a tab to switch; the others' state
+2. **Tab bar** — Bus Scanner, Wind Speed, Wind Direction, Wind Combined,
+   Wind Interface, Register Explorer, System Settings. Click a tab to
+   switch; the others' state
    (e.g. a running scan) keeps running in the background even while you're
    not looking at that tab.
 3. **Modbus Log** — always visible, pinned to the bottom, below the tabs.
@@ -71,8 +72,11 @@ cell for the resize handle).
 
 - [Bus Scanner](busScanner.md) — sweep an address range and see what
   responds.
-- [Wind Speed / Wind Direction](windTesters.md) — live decode and
-  configuration of the two wind sensor units.
+- [Wind Speed / Wind Direction / Wind Combined](windTesters.md) — live
+  decode and configuration of the wind sensor units.
+- [Wind Interface](windTesters.md) — read-only device/system diagnostics
+  (identity, DUT-side bus health) shared by all three wind builds; updates
+  on demand or opportunistically while any wind tab above is polling.
 - [Register Explorer](registerExplorer.md) — a manual, one-shot
   read/write tool for any register on any address.
 - [System Settings](systemSettings.md) — WiFi, NTP, manual time, and

@@ -10,6 +10,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-12
+
 ### Changed
 
 - Wind register map reconciled against the DUT's Technical Design
@@ -75,6 +77,29 @@ this project adheres to [Semantic Versioning](https://semver.org/).
     `/wind/start`, `/wind/config/read`, `/wind/config/write`, and
     `/api/v1/spec`'s register snapshot all updated to match. New NVS key
     `wind_comb_addr` (default 32) for the tab's last-used address.
+- **Wind Interface** tab — a fifth GUI tab decoding the DUT's five
+  device/system diagnostic registers (TDS §2.7, raw `0x0005`-`0x0009`:
+  status flags, build identification, uptime, and the DUT's own
+  CRC-error/served-request counters), identical on every build (FR-MB27)
+  rather than tied to a build variant the way the three sensor tabs are:
+  - `wind_poll` core gained `wind_interface_decode()` /
+    `wind_build_type_name()` and a `wind_interface_status_t` struct;
+    `wind_poll_task` gained `wind_poll_read_interface()` — a standalone
+    blocking FC04 read, completely independent of the single-active-poll
+    state machine — plus an `s_latest_iface` cache populated as a side
+    effect of every successful Speed/Direction/Combined poll (these
+    registers ride along in that poll's existing FC04 block; no dedicated
+    poll loop of its own). New NVS key `wind_iface_addr` (default 30).
+  - **Two update paths, both feeding the same tab, hence no Start/Stop
+    pair here unlike the other three tabs:** an on-demand single-shot read
+    via the tab's own button (new `POST /wind/interface/read`, and the
+    machine-API `GET /api/v1/interface?slave=<addr>`), and an
+    opportunistic live update whenever any of the three wind polls is
+    already running. Neither path takes or contends for the one poll slot
+    `wind_poll_task` enforces across Wind Speed/Direction/Combined.
+  - `web_core` gained `web_core_build_interface_json()`, backing all three
+    surfaces above (the two HTTP routes and a new WebSocket
+    `type:"interface"` push) from one builder.
 
 ### Removed
 

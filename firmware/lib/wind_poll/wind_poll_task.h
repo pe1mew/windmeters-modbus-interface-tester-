@@ -61,6 +61,20 @@ wind_sensor_type_t wind_poll_get_active_type(void);
 /** @brief Most recent successfully decoded reading (stale data kept on a failed poll, not cleared). @return A copy of the last decoded wind_reading_t; all-zero/false if wind_poll_has_data() is false. */
 wind_reading_t wind_poll_get_latest(void);
 
+/**
+ * @brief Most recent opportunistically-decoded device/system diagnostic
+ * status (TDS §2.7, raw 0x0005-0x0009) — populated as a side effect of
+ * every successful wind_poll_task_fn() poll, regardless of active sensor
+ * type (speed/direction/combined all read this same 5-register block
+ * within their existing FC04 transaction, TDS FR-MB27), not by a separate
+ * poll of its own. Reuses wind_poll_has_data() as its own "is this valid"
+ * signal, since a successful wind poll of any type implies this was just
+ * updated in the same breath — there is no second has-data flag.
+ * @return A copy of the last decoded wind_interface_status_t; all-zero/false
+ *         if wind_poll_has_data() is false.
+ */
+wind_interface_status_t wind_poll_get_latest_interface(void);
+
 /** @brief Has at least one successful poll ever happened? @return true once the first successful poll completes; never resets back to false. */
 bool wind_poll_has_data(void);
 
@@ -93,5 +107,21 @@ bool wind_poll_read_config(uint8_t addr, wind_config_t *out);
  *         back unchanged); false on timeout/CRC/framing/exception.
  */
 bool wind_poll_write_config_field(uint8_t addr, wind_config_field_t field, float value);
+
+/**
+ * @brief Single-shot blocking FC04 read of the DUT's device/system
+ * diagnostic registers (TDS §2.7, raw 0x0005-0x0009), completely
+ * independent of the single-active-poll state machine — does not touch
+ * s_active/s_target_addr/s_active_type/s_has_data and never calls
+ * wind_poll_set_active(), exactly like wind_poll_read_config() already is.
+ * Safe to call from any task. Blocks on the real transaction.
+ * @param addr Slave address to read, 1-247.
+ * @param out  Destination for the decoded status. Caller-owned; only
+ *             written on success — left untouched if this returns false.
+ * @return true if the FC04 transaction succeeded and @p out was populated;
+ *         false on timeout/CRC/framing/exception (no partial writes to
+ *         @p out in that case).
+ */
+bool wind_poll_read_interface(uint8_t addr, wind_interface_status_t *out);
 
 #endif /* ARDUINO */

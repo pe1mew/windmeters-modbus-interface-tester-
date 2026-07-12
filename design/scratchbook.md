@@ -422,8 +422,8 @@ Sections, replacing the template's sensor-config section with scan/test/explore:
 router). Reusing that router — instead of switching to one large per-tick
 object — means new messages are just new `type` values the existing
 dispatch `switch` grows a case for. `replay_window` is dropped (Replay mode
-is gone, §3); `status`, `log`, and `log_clear` carry over unchanged; `scan`
-and `wind` are new:
+is gone, §3); `status`, `log`, and `log_clear` carry over unchanged; `scan`,
+`wind`, and `interface` are new:
 
 ```json
 // type: "status" — ~1 s cadence, same as template. fw_version and
@@ -462,6 +462,22 @@ and `wind` are new:
   "dir_instant_deg": 182.8, "dir_avg_deg": 181.0, "dir_fault": false,
   "raw_adc": 520, "age_ms": 420 }
 
+// type: "interface" — pushed opportunistically whenever Wind Speed /
+// Direction / Combined is actively polling AND has produced at least one
+// successful reading (added with the Wind Interface tab, §7's tab list):
+// the DUT's device/system diagnostic registers (TDS §2.7, raw
+// 0x0005-0x0009) ride along in whichever sensor type's own FC04 block is
+// currently polling, so there's no separate poll loop of its own. One
+// shape regardless of which of the three is active (FR-MB27) — unlike
+// "wind" above, no "sensor_type" tag. Same fields the single-shot
+// POST /wind/interface/read returns (that route splices "ok":true onto
+// this same builder's output instead of "type").
+{ "type": "interface", "addr": 30, "build_type": 1, "build_name": "wind_speed",
+  "fw_version": 3, "status_flags": 0, "status_measurement_incomplete": false,
+  "status_avg_not_filled": false, "status_dir_fault": false, "uptime_s": 4021,
+  "crc_error_count": 0, "served_request_count": 812, "has_data": true,
+  "age_ms": 340 }
+
 // type: "log" / "log_clear" — unchanged from template
 ```
 
@@ -479,6 +495,7 @@ and `wind` are new:
 | `wind_dir_addr` | u8 | 31 | Last-used Wind Direction target |
 | `wind_comb_addr` | u8 | 32 | Last-used Wind Combined target, added 2026-07-11 |
 | `wind_poll_ms` | u32 | 1000 | Poll cadence, shared by all three wind tabs — no reason a bench tool needs a different cadence per sensor type. Shortened from `wind_poll_interval_ms` (21 chars, over the 15-char NVS key limit — `cfg_keys.h`) |
+| `wind_iface_addr` | u8 | 30 | Last-used Wind Interface tab target, independent of the other three — defaults to Wind Speed's address since registers `0x0005`-`0x0009` read identically on every build (§5) |
 
 ## 8. Development sequence
 

@@ -53,6 +53,7 @@
   <button class="tab-btn"        data-tab="windspeed"  onclick="switchTab('windspeed')">Wind Speed</button>
   <button class="tab-btn"        data-tab="winddir"    onclick="switchTab('winddir')">Wind Direction</button>
   <button class="tab-btn"        data-tab="windcomb"   onclick="switchTab('windcomb')">Wind Combined</button>
+  <button class="tab-btn"        data-tab="windiface"  onclick="switchTab('windiface')">Wind Interface</button>
   <button class="tab-btn"        data-tab="explorer"   onclick="switchTab('explorer')">Register Explorer</button>
   <button class="tab-btn"        data-tab="settings"   onclick="switchTab('settings')">System Settings</button>
 </nav>
@@ -299,6 +300,63 @@
   </div>
   <button onclick="postWindConfigRead('combined')">Refresh config from device</button>
   <p id="wcmb-config-status" class="hint"></p>
+</section>
+
+<!-- ── Wind Interface ──────────────────────────────────────────── -->
+<section class="tab-panel" id="tab-windiface">
+  <h2>Wind Interface</h2>
+  <p class="hint">Device/system registers (identity + bus health) for the DUT itself —
+    identical on every build (TDS &sect;2.7). These are the DUT SLAVE's own counters
+    (0x0008/0x0009, Modicon 30009/30010) — distinct from the tester's OWN Modbus bus
+    health shown in the "Modbus Bus" status card above.</p>
+  <p class="hint">Reads once on demand — and also updates automatically whenever a
+    Wind Speed / Direction / Combined poll is running, since these registers ride
+    along in the same read.</p>
+
+  <table class="reg-tbl">
+    <thead><tr><th>Register</th><th>Addr</th><th>Field</th><th>Scale</th></tr></thead>
+    <tbody>
+      <tr><td>Input (FC04)</td><td>0x0005</td><td>status_flags</td><td>bitfield — see Status card</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0006</td><td>identification</td><td>build_type&lt;&lt;8 | fw_version</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0007</td><td>uptime_s</td><td>unscaled s, saturates at 65535</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0008</td><td>crc_error_count (DUT-side)</td><td>unscaled, wraps at 65535</td></tr>
+      <tr><td>Input (FC04)</td><td>0x0009</td><td>served_request_count (DUT-side)</td><td>unscaled, wraps at 65535</td></tr>
+    </tbody>
+  </table>
+
+  <div class="row">
+    <label>Slave address</label>
+    <input type="number" id="wiface-addr" min="1" max="247" value="30" class="short">
+    <button id="btn-wiface-read" onclick="postInterfaceRead()">Read device registers</button>
+  </div>
+
+  <div class="grid4">
+    <div class="card">
+      <h3>Identity</h3>
+      <p>Build: <strong id="wiface-build">—</strong></p>
+      <p>Build code: <strong id="wiface-buildcode">—</strong></p>
+      <p>Firmware: <strong id="wiface-fw">—</strong></p>
+    </div>
+    <div class="card">
+      <h3>Status</h3>
+      <p>Measurement: <strong id="wiface-st-meas">—</strong></p>
+      <p>Averaging: <strong id="wiface-st-avg">—</strong></p>
+      <span id="wiface-fault" class="badge fault" style="display:none">Direction fault</span>
+      <p>Raw flags: <strong id="wiface-status-raw">—</strong></p>
+    </div>
+    <div class="card">
+      <h3>Counters (DUT)</h3>
+      <p>Uptime: <strong id="wiface-uptime">—</strong></p>
+      <p>DUT CRC errors: <strong id="wiface-crc">—</strong></p>
+      <p>DUT served: <strong id="wiface-served">—</strong></p>
+    </div>
+    <div class="card">
+      <h3>Age</h3>
+      <p>Age: <strong id="wiface-age">—</strong> ms</p>
+    </div>
+  </div>
+
+  <p id="wiface-read-status" class="hint"></p>
 </section>
 
 <!-- ── Register Explorer ───────────────────────────────────────── -->

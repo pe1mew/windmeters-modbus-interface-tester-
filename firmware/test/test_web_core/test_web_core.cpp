@@ -194,6 +194,101 @@ void test_wind_json_combined_reports_dir_fault(void)
     TEST_ASSERT_TRUE(strstr(buf, "\"dir_fault\":true") != NULL);
 }
 
+/* ── interface JSON (TDS §2.7, device/system diagnostics) ── */
+
+void test_interface_json_no_data(void)
+{
+    wind_interface_status_t st;
+    memset(&st, 0, sizeof(st));
+
+    char buf[256];
+    web_core_build_interface_json(buf, sizeof(buf), 31, &st, false, 0);
+    TEST_ASSERT_EQUAL_STRING("{\"type\":\"interface\",\"addr\":31,\"has_data\":false}", buf);
+}
+
+void test_interface_json_with_data_all_status_bits_false(void)
+{
+    wind_interface_status_t st;
+    memset(&st, 0, sizeof(st));
+    st.status_flags = 0;
+    st.status_measurement_incomplete = false;
+    st.status_avg_not_filled = false;
+    st.status_dir_fault = false;
+    st.build_type = 0x01;
+    st.fw_version = 5;
+    st.uptime_s = 120;
+    st.crc_error_count = 0;
+    st.served_request_count = 87;
+
+    char buf[384];
+    web_core_build_interface_json(buf, sizeof(buf), 30, &st, true, 350);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"interface\",\"addr\":30,\"build_type\":1,\"build_name\":\"wind_speed\","
+        "\"fw_version\":5,\"status_flags\":0,"
+        "\"status_measurement_incomplete\":false,\"status_avg_not_filled\":false,\"status_dir_fault\":false,"
+        "\"uptime_s\":120,\"crc_error_count\":0,\"served_request_count\":87,"
+        "\"has_data\":true,\"age_ms\":350}",
+        buf);
+}
+
+void test_interface_json_with_data_all_status_bits_true(void)
+{
+    /* Large uptime/crc/served values (>255) alongside all three status
+     * bools true simultaneously — mirrors
+     * test_wind_interface_decode_diagnostic_counters_pass_through_unscaled's
+     * truncation-catching reasoning, at the JSON-building layer. */
+    wind_interface_status_t st;
+    memset(&st, 0, sizeof(st));
+    st.status_flags = 0x0007;
+    st.status_measurement_incomplete = true;
+    st.status_avg_not_filled = true;
+    st.status_dir_fault = true;
+    st.build_type = 0x03;
+    st.fw_version = 42;
+    st.uptime_s = 40000;
+    st.crc_error_count = 1000;
+    st.served_request_count = 500;
+
+    char buf[384];
+    web_core_build_interface_json(buf, sizeof(buf), 32, &st, true, 999);
+    TEST_ASSERT_EQUAL_STRING(
+        "{\"type\":\"interface\",\"addr\":32,\"build_type\":3,\"build_name\":\"wind_combined\","
+        "\"fw_version\":42,\"status_flags\":7,"
+        "\"status_measurement_incomplete\":true,\"status_avg_not_filled\":true,\"status_dir_fault\":true,"
+        "\"uptime_s\":40000,\"crc_error_count\":1000,\"served_request_count\":500,"
+        "\"has_data\":true,\"age_ms\":999}",
+        buf);
+}
+
+void test_interface_json_build_name_uses_real_lookup_direction(void)
+{
+    /* build_name must come from the real wind_build_type_name() lookup,
+     * not a hardcoded/wrong string in the builder — build_type 0x02 here,
+     * distinct from the speed/combined values the two exact-match tests
+     * above already cover. */
+    wind_interface_status_t st;
+    memset(&st, 0, sizeof(st));
+    st.build_type = 0x02;
+
+    char buf[384];
+    web_core_build_interface_json(buf, sizeof(buf), 31, &st, true, 1);
+    TEST_ASSERT_TRUE(strstr(buf, "\"build_name\":\"wind_direction\"") != NULL);
+}
+
+void test_interface_json_build_name_uses_real_lookup_unknown(void)
+{
+    /* And an out-of-range build_type must come through as "unknown", not
+     * silently blank/wrong — proves the builder isn't luck-matching just
+     * the three known values. */
+    wind_interface_status_t st;
+    memset(&st, 0, sizeof(st));
+    st.build_type = 0xFF;
+
+    char buf[384];
+    web_core_build_interface_json(buf, sizeof(buf), 31, &st, true, 1);
+    TEST_ASSERT_TRUE(strstr(buf, "\"build_name\":\"unknown\"") != NULL);
+}
+
 /* ── status JSON ── */
 
 void test_status_json_no_exception(void)
@@ -723,6 +818,11 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_wind_json_no_data_combined);
     RUN_TEST(test_wind_json_combined_with_data);
     RUN_TEST(test_wind_json_combined_reports_dir_fault);
+    RUN_TEST(test_interface_json_no_data);
+    RUN_TEST(test_interface_json_with_data_all_status_bits_false);
+    RUN_TEST(test_interface_json_with_data_all_status_bits_true);
+    RUN_TEST(test_interface_json_build_name_uses_real_lookup_direction);
+    RUN_TEST(test_interface_json_build_name_uses_real_lookup_unknown);
     RUN_TEST(test_status_json_no_exception);
     RUN_TEST(test_status_json_with_exception);
     RUN_TEST(test_valid_function_codes_accepted);

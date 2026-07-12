@@ -22,6 +22,7 @@ static wind_sensor_type_t s_active_type   = WIND_SENSOR_SPEED; /**< Sensor type 
 static wind_reading_t     s_latest; /**< Last successfully decoded reading; stale-but-kept on a failed poll, see wind_poll_get_latest(). */
 static bool                s_has_data      = false; /**< Has any poll ever succeeded? Sticky — never reset back to false. */
 static uint32_t            s_last_poll_ms  = 0; /**< millis() timestamp of the last successful poll; meaningful only when s_has_data is true. */
+static wind_interface_status_t s_latest_iface; /**< Opportunistically decoded from the same FC04 block every successful poll below already reads (TDS §2.7, raw 0x0005-0x0009); see wind_poll_get_latest_interface(). */
 
 /**
  * @brief Submit a read (FC03/FC04) through modbus_master_task's queue and wait for the reply.
@@ -112,6 +113,12 @@ static void wind_poll_task_fn(void * /*pvParameters*/)
                     wind_poll_decode(s_active_type, raw, &s_latest);
                     s_has_data     = true;
                     s_last_poll_ms = millis();
+                    /* Registers 0x0005-0x0009 are within every build's
+                     * 12-register minimum (wind_sensor_input_register_count()
+                     * is 12 or 13, TDS FR-MB27), so raw[5..9] is always valid
+                     * here regardless of s_active_type — opportunistic, not a
+                     * second poll. */
+                    wind_interface_decode(&raw[5], &s_latest_iface);
                 }
                 /* On failure: s_latest/s_has_data are left as the last
                  * good reading — a growing wind_poll_age_ms() is how a
@@ -147,6 +154,11 @@ wind_sensor_type_t wind_poll_get_active_type(void)
 wind_reading_t wind_poll_get_latest(void)
 {
     return s_latest;
+}
+
+wind_interface_status_t wind_poll_get_latest_interface(void)
+{
+    return s_latest_iface;
 }
 
 bool wind_poll_has_data(void)
@@ -190,6 +202,20 @@ bool wind_poll_write_config_field(uint8_t addr, wind_config_field_t field, float
     }
     uint16_t raw_value = wind_config_field_encode(field, value);
     return do_write_single(addr, reg, raw_value);
+}
+
+bool wind_poll_read_interface(uint8_t addr, wind_interface_status_t *out)
+{
+    /* TDS §2.7: 5 registers starting at raw 0x0005, identical addresses/
+     * meaning regardless of sensor type (FR-MB27) — a fresh, separate FC04
+     * read, not reusing any wind-poll-in-progress state (same independence
+     * as wind_poll_read_config() above). */
+    uint16_t raw[5];
+    if (!do_read_registers(addr, 0x04, 0x0005, 5, raw)) {
+        return false;
+    }
+    wind_interface_decode(raw, out);
+    return true;
 }
 
 #endif /* ARDUINO */

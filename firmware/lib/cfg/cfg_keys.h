@@ -36,6 +36,7 @@
 #define CFG_KEY_WIND_SPEED_ADDR      "wind_speed_addr" /**< NVS key: last-used Wind Speed tab target slave address. Split off the old shared "wind_test_addr" 2026-07-02. */
 #define CFG_KEY_WIND_DIR_ADDR        "wind_dir_addr" /**< NVS key: last-used Wind Direction tab target slave address, independent of CFG_KEY_WIND_SPEED_ADDR. */
 #define CFG_KEY_WIND_COMBINED_ADDR   "wind_comb_addr" /**< NVS key: last-used Wind Combined tab target slave address, independent of the other two. Added 2026-07-11 with the combined build. */
+#define CFG_KEY_WIND_INTERFACE_ADDR  "wind_iface_addr" /**< NVS key: last-used Wind Interface tab target slave address, independent of the other three. Defaults to the Wind Speed address, since registers 0x0005-0x0009 read identically on every build (TDS §2.7). */
 #define CFG_KEY_WIND_POLL_INTERVAL   "wind_poll_ms" /**< NVS key: shared poll cadence (ms) for all three wind tabs. Shortened from "wind_poll_interval_ms" (21 chars) — see file header. */
 
 #define CFG_DEFAULT_WIFI_SSID          "" /**< Default WiFi SSID — empty means AP-only until configured. */
@@ -49,4 +50,5 @@
 #define CFG_DEFAULT_WIND_SPEED_ADDR    30u /**< Default Wind Speed tab target address. */
 #define CFG_DEFAULT_WIND_DIR_ADDR      31u /**< Default Wind Direction tab target address. */
 #define CFG_DEFAULT_WIND_COMBINED_ADDR 32u /**< Default Wind Combined tab target address (TDS FR-S03). */
+#define CFG_DEFAULT_WIND_INTERFACE_ADDR 30u /**< Default Wind Interface tab target address — same as Wind Speed's, since registers 0x0005-0x0009 read identically on every build (TDS §2.7). */
 #define CFG_DEFAULT_WIND_POLL_INTERVAL 1000u /**< Default poll cadence, ms, shared by all three wind tabs. */

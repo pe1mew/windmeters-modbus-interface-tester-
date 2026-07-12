@@ -104,6 +104,70 @@ uint8_t wind_sensor_input_register_count(wind_sensor_type_t type);
 void wind_poll_decode(wind_sensor_type_t type, const uint16_t raw_registers[13], wind_reading_t *out);
 
 /**
+ * @brief Bitfield values for wind_interface_status_t::status_flags (input
+ * register 0x0005/30006, TDS §2.7 / FR-S33) — same "raw sentinel" naming
+ * convention as WIND_FAULT_RAW. Bits 3-15 are reserved (always 0, TDS
+ * §2.7).
+ */
+#define WIND_STATUS_MEASUREMENT_INCOMPLETE 0x0001u /**< Bit 0: no measurement window completed yet since reset or a 40002 (measurement window) write. */
+#define WIND_STATUS_AVG_NOT_FILLED         0x0002u /**< Bit 1: averaging accumulator not yet filled (TDS §3.5). */
+#define WIND_STATUS_DIR_FAULT              0x0004u /**< Bit 2: direction-sensor fault (mirrors the FR-S38 fault sentinel on 30001/30003, but latched here as a status bit instead). */
+
+/**
+ * @brief One decoded snapshot of the DUT's device/system diagnostic
+ * registers (TDS §2.7, raw 0x0005-0x0009 / Modicon 30006-30010) — status
+ * flags, build/firmware identification, uptime, and bus-health counters.
+ * Identical on every build (speed/direction/combined all implement these
+ * five registers the same way), unlike wind_reading_t's build-dependent
+ * fields. Decoded by wind_interface_decode() from a 5-register FC04 block;
+ * see that function for the exact register-to-field mapping.
+ */
+typedef struct {
+    uint16_t status_flags;                  /**< 0x0005 (30006), raw bitfield — see WIND_STATUS_* for bit meanings (TDS FR-S33). */
+    bool     status_measurement_incomplete; /**< True when status_flags bit 0 (WIND_STATUS_MEASUREMENT_INCOMPLETE) is set. */
+    bool     status_avg_not_filled;         /**< True when status_flags bit 1 (WIND_STATUS_AVG_NOT_FILLED) is set. */
+    bool     status_dir_fault;              /**< True when status_flags bit 2 (WIND_STATUS_DIR_FAULT) is set. */
+    uint8_t  build_type;                    /**< 0x0006 (30007) high byte: 0x01 speed, 0x02 direction, 0x03 combined (TDS FR-S32). See wind_build_type_name(). */
+    uint8_t  fw_version;                    /**< 0x0006 (30007) low byte: DUT firmware version (TDS FR-S32). */
+    uint16_t uptime_s;                      /**< 0x0007 (30008), seconds since reset, saturating at 65535 (TDS FR-S34). */
+    uint16_t crc_error_count;               /**< 0x0008 (30009), DUT-side bus CRC error count, wrapping at 65535 (TDS FR-S35). */
+    uint16_t served_request_count;          /**< 0x0009 (30010), DUT-side served request count, wrapping at 65535 (TDS FR-S35). */
+} wind_interface_status_t;
+
+/**
+ * @brief Decode the DUT's device/system diagnostic registers (TDS §2.7,
+ * raw 0x0005-0x0009 / Modicon 30006-30010) into a wind_interface_status_t.
+ * Identical register layout on every build (speed/direction/combined) — no
+ * per-build selection is needed here, unlike wind_poll_decode().
+ * @param status_block Pointer to 5 consecutive raw register values whose
+ *                      element 0 is register 0x0005 — status_block[0..4]
+ *                      map to raw 0x0005-0x0009 (30006-30010) in order:
+ *                      [0] status_flags, [1] identification, [2] uptime_s,
+ *                      [3] crc_error_count, [4] served_request_count. May
+ *                      be a dedicated 5-element array from a fresh FC04
+ *                      read starting at 0x0005, or a pointer into the
+ *                      middle of a larger buffer that started at 0x0000
+ *                      (e.g. `&raw[5]`) — this function only ever reads
+ *                      status_block[0..4] and makes no assumption about
+ *                      what precedes or follows them. Caller-owned.
+ * @param out           Destination for the decoded status. Caller-owned;
+ *                      fully overwritten (every field), not merged with any
+ *                      prior contents.
+ */
+void wind_interface_decode(const uint16_t status_block[5], wind_interface_status_t *out);
+
+/**
+ * @brief wind_interface_status_t::build_type -> its display name
+ * ("wind_speed"/"wind_direction"/"wind_combined"/"unknown"), TDS FR-S32.
+ * Same static-string-literal, never-NULL lookup pattern as web_core.cpp's
+ * wind_sensor_type_name().
+ * @param build_type Build type byte (0x0006/30007 high byte) to name.
+ * @return Static string literal; never NULL. "unknown" for any value other
+ *         than 0x01/0x02/0x03.
+ */
+const char *wind_build_type_name(uint8_t build_type);
+
+/**
  * @brief Holding register fields (TDS §2.8) — 6 registers, same addresses,
  * on every build (FR-MB27): the last two (calibration/pulses-per-rotation,
  * added 2026-07-11) are inert on a direction-only build but still exist,

@@ -80,6 +80,36 @@ int web_core_build_wind_json(char *out, size_t out_size, wind_sensor_type_t type
                               const wind_reading_t *reading, bool has_data, uint32_t age_ms);
 
 /**
+ * @brief Build the `type:"interface"` WebSocket payload — the DUT's
+ * device/system diagnostic registers (TDS §2.7, raw 0x0005-0x0009), which
+ * are identical on every build (speed/direction/combined all implement
+ * them the same way, FR-MB27), unlike web_core_build_wind_json()'s
+ * per-sensor-type reading fields — so there's no `type` selector here.
+ *
+ * This one builder is used for both the single-shot HTTP reply
+ * (POST /wind/interface/read) and the opportunistic WebSocket push
+ * (broadcast_interface_if_active()) — its own output never includes an
+ * `"ok"` field (only `"type"`, same WebSocket-message convention as
+ * web_core_build_wind_json()); the HTTP call site splices one on separately.
+ *
+ * @param out       Destination buffer for the JSON text.
+ * @param out_size  Capacity of @p out, including room for the null terminator.
+ * @param addr      Slave address @p st was (or would be) read from; echoed
+ *                   back verbatim, not validated here.
+ * @param st        Decoded status to report; ignored (may be NULL) when
+ *                   @p has_data is false.
+ * @param has_data  false emits only `{"type":"interface","addr":...,
+ *                   "has_data":false}` — no read has come back yet for
+ *                   this target.
+ * @param age_ms    Milliseconds since @p st was captured; only emitted
+ *                   when @p has_data is true.
+ * @return Number of bytes written (excluding the null terminator), matching snprintf's convention.
+ */
+int web_core_build_interface_json(char *out, size_t out_size, uint8_t addr,
+                                   const wind_interface_status_t *st,
+                                   bool has_data, uint32_t age_ms);
+
+/**
  * @brief Build the `type:"status"` WebSocket payload.
  *
  * Includes @p fw_version (the footer's version display reads this — GUI

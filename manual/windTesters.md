@@ -1,4 +1,4 @@
-# Wind Speed / Wind Direction / Wind Combined
+# Wind Speed / Wind Direction / Wind Combined / Wind Interface
 
 The device under test ships as up to **three physically separate build
 variants**: a cup anemometer (wind speed), a wind-vane potentiometer (wind
@@ -26,12 +26,14 @@ input map is one register longer than the single-sensor builds' (13
 registers instead of 12), since it adds a direction raw-ADC register that
 doesn't exist at all on the single-sensor builds (see the Wind Combined
 section below). Each tab shows only the registers that are actually
-meaningful for that build; the rest (the other sensor's fields on a
-single-sensor build, plus device-level diagnostics like uptime and error
-counters) exist at the same addresses and are reachable via [Register
-Explorer](registerExplorer.md), just not surfaced on these tabs. **There is
-no device-address register on any variant** — the Modbus address is set by
-a hardware solder jumper only and can't be read or changed over Modbus.
+meaningful for that build; the other sensor's fields on a single-sensor
+build exist at the same addresses and are reachable via [Register
+Explorer](registerExplorer.md), just not surfaced on that tab. Device-level
+diagnostics (status, identification, uptime, error counters) get their own
+tab — **Wind Interface**, below — since they're identical on every build
+rather than a Speed/Direction/Combined-specific concern. **There is no
+device-address register on any variant** — the Modbus address is set by a
+hardware solder jumper only and can't be read or changed over Modbus.
 
 ## Wind Speed tab
 
@@ -175,6 +177,76 @@ Click **Refresh config from device** to read all six values back (FC03) and
 populate the fields above with what's actually stored on the unit right
 now — including confirming a calibration write actually persisted (the DUT
 stores all six holding registers in non-volatile memory across resets).
+
+## Wind Interface tab
+
+Unlike the three tabs above, this one isn't tied to a build variant — it
+decodes five **device/system diagnostic registers** (identity plus the
+DUT's own bus-health counters) that exist, unchanged, on every Wind Speed /
+Direction / Combined unit alike (TDS §2.7, FR-MB27). One tab covers all
+three builds; default slave address **30** (Wind Speed's default — picked
+as a sensible starting point, since these registers read identically
+regardless of which build address you actually point it at).
+
+**Register map:**
+
+| Register | Addr | Field | Scale |
+|---|---|---|---|
+| Input (FC04) | `0x0005` | status_flags | bitfield — see Status card below |
+| Input (FC04) | `0x0006` | identification | build_type<<8 \| fw_version |
+| Input (FC04) | `0x0007` | uptime_s | unscaled, s (saturates at 65535) |
+| Input (FC04) | `0x0008` | crc_error_count (DUT-side) | unscaled (wraps at 65535) |
+| Input (FC04) | `0x0009` | served_request_count (DUT-side) | unscaled (wraps at 65535) |
+
+**No Start/Stop — two update paths instead:**
+
+1. **On demand:** set **Slave address** (default 30) and click **Read
+   device registers**. This does one single-shot FC04 read of registers
+   `0x0005`-`0x0009` and reports it once.
+2. **Opportunistically, whenever a wind poll is already running:** these
+   same five registers ride along in whichever of Wind Speed / Wind
+   Direction / Wind Combined's own FC04 block is currently polling (TDS
+   §2.7 puts them right after that build's own measurement registers, in
+   the same read) — so this tab's cards update live too, for free, without
+   a second poll loop of its own.
+
+Both paths feed the same cards. The reason there's no Start/Stop pair here,
+unlike every other wind tab: the on-demand read is a standalone blocking
+call, completely independent of `wind_poll_task`'s single-active-poll state
+machine — it never touches, and is never affected by, whichever of the
+three sensor tabs currently holds the one poll slot. Clicking **Read device
+registers** can't silently stop a Wind Speed/Direction/Combined poll the
+way starting a *different* wind tab would; it just borrows a moment of bus
+time for its own transaction and returns.
+
+**Identity card:** build name and raw build code (`0x01`=speed, `0x02`=
+direction, `0x03`=combined), decoded from register `0x0006`'s high byte,
+plus firmware version from its low byte.
+
+**Status card:** the two "not ready yet" bits — measurement window not yet
+completed since reset, averaging accumulator not yet filled — plus the
+direction-fault bit (same fault condition as the Wind Direction tab's red
+badge, just reported here as a status bit instead of a sentinel register
+value), all decoded from `0x0005`. The raw flags value is also shown
+alongside the decoded bits.
+
+**Counters (DUT) card — not the same thing as the "Modbus Bus" status
+card:** `crc_error_count` / `served_request_count` here are the **DUT
+SLAVE's own counters** (`0x0008`/`0x0009`, Modicon 30009/30010) — how many
+CRC errors *it* has detected and how many requests *it* has served,
+tracked on the DUT's own microcontroller. This is a different thing from
+the page-level **Modbus Bus** status card's `crc_errors`/`timeouts`
+(see [GUI Overview](gui.md)), which are the **tester MASTER's own**
+counters — how many of *the tester's* requests failed. A DUT reporting a
+clean count here can still sit behind a tester logging timeouts (bad
+wiring, a loose connector, or the wrong address), and vice versa; check
+both when troubleshooting, don't assume one implies the other.
+
+**Age card:** milliseconds since this tab's data was last refreshed, by
+either update path above. A growing age while no wind tab is polling just
+means nobody has clicked Read since; a growing age *while* a poll is
+running means something's gone wrong with that poll (the DUT stopped
+answering, most likely).
 
 ## If a register doesn't behave as documented
 

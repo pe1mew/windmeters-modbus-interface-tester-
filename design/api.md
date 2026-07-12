@@ -4,7 +4,7 @@
 |--------------|--------------------------------------------------------------|
 | Document     | API Specification                                            |
 | Project      | Windmeters Modbus Interface Tester                           |
-| Status       | **Implemented** — all 7 endpoints below are live and hardware-verified (`design/progress.md` §7, `design/whatsNext.md` §2) |
+| Status       | **Implemented** — the 7 core endpoints are live and hardware-verified (`design/progress.md` §7, `design/whatsNext.md` §2); `GET /api/v1/interface` (§5.6) added alongside the Wind Interface GUI tab, not yet reflected in `design/progress.md` |
 | Date         | 2026-07-02 (implemented same day; wind endpoints updated 2026-07-02 for the speed/direction split) |
 | Audience     | Any HTTP-capable tool; designed specifically so an LLM (Claude) can drive the tester during bench sessions |
 | Related docs | `design/scratchbook.md` (§6.3 master core API, §7 web UI endpoints), `firmware/lib/web_server/web_server_task.cpp` (existing UI endpoints this generalises) |
@@ -472,6 +472,82 @@ has been read yet, matching the WebSocket shape's existing convention.
 `wind_test_addr` — which may differ from the address actually in flight if
 a caller started polling with an ad hoc `addr` override via `POST
 /wind/start` rather than the stored default.
+
+### 5.6 `GET /api/v1/interface?slave=<addr>` — live DUT device/system diagnostic read
+
+Added alongside the Wind Interface GUI tab (`manual/windTesters.md`) —
+decodes the DUT's five device/system diagnostic registers (identity plus
+the DUT's own bus-health counters, TDS §2.7, raw `0x0005`-`0x0009` /
+Modicon 30006-30010). These registers were already reachable via `POST
+/api/v1/modbus` (`{"slave":<n>,"function":4,"register":5,"count":5}`) —
+this endpoint doesn't expose anything new on the wire; it's a decoded
+convenience view over an existing FC04 block, the same relationship
+`GET /api/v1/wind` (§5.5) has to the wind measurement registers.
+
+**Unlike §5.5, this always issues a fresh bus read rather than returning a
+cached value.** `wind_poll_read_interface()` is a standalone blocking FC04
+call, entirely independent of `wind_poll_task`'s single-active-poll state
+machine (the "only one of Speed/Direction/Combined at a time" rule) — so
+there's no poll-slot contention to avoid by caching, unlike the wind
+readings above. `age_ms` in the response is therefore always `0`.
+
+`slave` (query param, optional) defaults to the Wind Interface tab's
+last-used address (NVS `wind_iface_addr`, falls back to `30`) when omitted
+or outside `1`-`247`.
+
+```json
+// GET /api/v1/interface?slave=30
+{
+  "ok": true,
+  "target": 30,
+  "type": "interface",
+  "addr": 30,
+  "build_type": 1,
+  "build_name": "wind_speed",
+  "fw_version": 3,
+  "status_flags": 0,
+  "status_measurement_incomplete": false,
+  "status_avg_not_filled": false,
+  "status_dir_fault": false,
+  "uptime_s": 4021,
+  "crc_error_count": 0,
+  "served_request_count": 812,
+  "has_data": true,
+  "age_ms": 0
+}
+```
+
+`build_name` is decoded from `build_type` (`1`=`"wind_speed"`,
+`2`=`"wind_direction"`, `3`=`"wind_combined"`, anything else=`"unknown"`) —
+see `design/scratchbook.md` §5's identification-register row. The three
+`status_*` booleans decode TDS §2.7's `status_flags` bitfield (bit0
+`status_measurement_incomplete`, bit1 `status_avg_not_filled`, bit2
+`status_dir_fault`); `status_flags` itself is also included raw, same
+"decoded fields plus the raw value" convention used elsewhere in this API.
+
+On a bus-level failure (timeout/CRC/exception — same causes as §4.3), the
+response is `{"ok":false,"target":30}` — HTTP 200, no `status`/`detail`/
+`hint`. This is a narrower error contract than the core `POST
+/api/v1/modbus` endpoint's; if the failure reason matters to your client,
+issue the equivalent `POST /api/v1/modbus` read directly instead.
+
+`target` and `addr` both carry the same slave address, echoed twice for a
+minor reason: `target` matches `GET /api/v1/wind`'s field name for "which
+address this read was against" (naming parity across the API); `addr` is
+whatever `web_core_build_interface_json()` already emits for the
+WebSocket `type:"interface"` push (`design/scratchbook.md` §7) — this
+endpoint reuses that builder verbatim rather than having its own shape.
+
+**Not documented here:** the Wind Interface tab's own **Read device
+registers** button uses a separate, GUI-internal route,
+`POST /wind/interface/read` — out of scope for this document per §1 (the
+human web UI isn't covered here, same as `/wind/start`/`/wind/config/read`
+aren't). It wraps the same `wind_poll_read_interface()` core as this
+endpoint and returns the same fields with `"ok":true` spliced on instead of
+`"target"`; see `manual/windTesters.md`'s Wind Interface section for its
+behavior. Likewise the opportunistic WebSocket `type:"interface"` push is
+documented in `design/scratchbook.md` §7 alongside the other `type`-routed
+messages, not here (§1 also scopes the WebSocket channel out of this doc).
 
 ---
 

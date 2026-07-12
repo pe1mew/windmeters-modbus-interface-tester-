@@ -268,6 +268,183 @@ void test_interval_elapsed_true_at_or_after_interval(void)
     TEST_ASSERT_TRUE(wind_poll_interval_elapsed(2500, 1000, 1000));  /* 1500ms, well past */
 }
 
+/* ── wind interface decode (TDS §2.7, device/system registers) ── */
+
+void test_wind_interface_decode_all_clear_status(void)
+{
+    uint16_t status_block[5] = {0x0000, 0, 0, 0, 0};
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_EQUAL_UINT16(0x0000, st.status_flags);
+    TEST_ASSERT_FALSE(st.status_measurement_incomplete);
+    TEST_ASSERT_FALSE(st.status_avg_not_filled);
+    TEST_ASSERT_FALSE(st.status_dir_fault);
+}
+
+void test_wind_interface_decode_measurement_incomplete_bit_only(void)
+{
+    uint16_t status_block[5] = {WIND_STATUS_MEASUREMENT_INCOMPLETE, 0, 0, 0, 0};
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_TRUE(st.status_measurement_incomplete);
+    TEST_ASSERT_FALSE(st.status_avg_not_filled);
+    TEST_ASSERT_FALSE(st.status_dir_fault);
+}
+
+void test_wind_interface_decode_avg_not_filled_bit_only(void)
+{
+    uint16_t status_block[5] = {WIND_STATUS_AVG_NOT_FILLED, 0, 0, 0, 0};
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_FALSE(st.status_measurement_incomplete);
+    TEST_ASSERT_TRUE(st.status_avg_not_filled);
+    TEST_ASSERT_FALSE(st.status_dir_fault);
+}
+
+void test_wind_interface_decode_dir_fault_bit_only(void)
+{
+    uint16_t status_block[5] = {WIND_STATUS_DIR_FAULT, 0, 0, 0, 0};
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_FALSE(st.status_measurement_incomplete);
+    TEST_ASSERT_FALSE(st.status_avg_not_filled);
+    TEST_ASSERT_TRUE(st.status_dir_fault);
+}
+
+void test_wind_interface_decode_all_three_status_bits_set(void)
+{
+    uint16_t status_block[5] = {
+        (uint16_t)(WIND_STATUS_MEASUREMENT_INCOMPLETE | WIND_STATUS_AVG_NOT_FILLED | WIND_STATUS_DIR_FAULT),
+        0, 0, 0, 0
+    };
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_EQUAL_UINT16(0x0007, st.status_flags);
+    TEST_ASSERT_TRUE(st.status_measurement_incomplete);
+    TEST_ASSERT_TRUE(st.status_avg_not_filled);
+    TEST_ASSERT_TRUE(st.status_dir_fault);
+}
+
+void test_wind_interface_decode_unrelated_bit_does_not_leak_into_bools(void)
+{
+    /* TDS §2.7 says bits 3-15 are reserved (always 0) in practice, but
+     * decode() must only ever consult bits 0/1/2 for the three bools
+     * regardless of what a slave actually puts on the wire. */
+    uint16_t status_block[5] = {0x00F8, 0, 0, 0, 0}; /* bits 3-7 set, bits 0-2 clear */
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_EQUAL_UINT16(0x00F8, st.status_flags); /* raw value still passed through verbatim */
+    TEST_ASSERT_FALSE(st.status_measurement_incomplete);
+    TEST_ASSERT_FALSE(st.status_avg_not_filled);
+    TEST_ASSERT_FALSE(st.status_dir_fault);
+}
+
+void test_wind_interface_decode_identification_known_combined_value(void)
+{
+    /* 0x0301 is this project's own documented combined-build identity
+     * value (see test_wind_poll_decodes_combined_fields_from_full_thirteen_register_block's
+     * raw[6] above) — build_type 0x03 (combined), fw_version 0x01. */
+    uint16_t status_block[5] = {0, 0x0301, 0, 0, 0};
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_EQUAL_UINT8(0x03, st.build_type);
+    TEST_ASSERT_EQUAL_UINT8(0x01, st.fw_version);
+}
+
+void test_wind_interface_decode_identification_fw_version_only_nonzero(void)
+{
+    /* Proves the hi/lo split isn't accidentally swapped: fw_version alone
+     * nonzero, build_type must stay 0. */
+    uint16_t status_block[5] = {0, 0x0042, 0, 0, 0};
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_EQUAL_UINT8(0x00, st.build_type);
+    TEST_ASSERT_EQUAL_UINT8(0x42, st.fw_version);
+}
+
+void test_wind_interface_decode_identification_build_type_only_nonzero(void)
+{
+    /* And the reverse: build_type alone nonzero, fw_version must stay 0. */
+    uint16_t status_block[5] = {0, 0x0200, 0, 0, 0};
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_EQUAL_UINT8(0x02, st.build_type);
+    TEST_ASSERT_EQUAL_UINT8(0x00, st.fw_version);
+}
+
+void test_wind_interface_decode_diagnostic_counters_pass_through_unscaled(void)
+{
+    /* Values >255 to catch an accidental uint8_t-width truncation
+     * somewhere in the decode path — these are uint16_t fields
+     * (wind_poll.h). */
+    uint16_t status_block[5] = {0, 0, 40000, 1000, 500};
+    wind_interface_status_t st;
+    wind_interface_decode(status_block, &st);
+    TEST_ASSERT_EQUAL_UINT16(40000, st.uptime_s);
+    TEST_ASSERT_EQUAL_UINT16(1000, st.crc_error_count);
+    TEST_ASSERT_EQUAL_UINT16(500, st.served_request_count);
+}
+
+void test_wind_interface_decode_reads_only_its_own_window_when_passed_pointer_into_larger_buffer(void)
+{
+    /* wind_poll.h's own contract: status_block may be &raw[5] into a
+     * larger buffer that started at 0x0000 — decode() must read exactly
+     * the 5 elements starting at the pointer it's given, nothing before
+     * or after. Same spirit/technique as
+     * test_wind_poll_dir_raw_adc_is_zero_for_non_combined_types above:
+     * seed the out-of-window slots with sentinel values that would
+     * produce obviously wrong output if leaked in, and the in-window
+     * slots with the real values under test. */
+    uint16_t raw[13];
+    raw[0] = 9999; raw[1] = 9999; raw[2] = 9999; raw[3] = 9999; raw[4] = 9999; /* before the window */
+    raw[5] = 0x0002;  /* status_flags: avg_not_filled only */
+    raw[6] = 0x0301;  /* identification: build_type 3, fw_version 1 */
+    raw[7] = 12345;   /* uptime_s */
+    raw[8] = 111;     /* crc_error_count */
+    raw[9] = 222;     /* served_request_count */
+    raw[10] = 8888; raw[11] = 8888; raw[12] = 8888; /* after the window */
+
+    wind_interface_status_t st;
+    wind_interface_decode(&raw[5], &st);
+
+    TEST_ASSERT_EQUAL_UINT16(0x0002, st.status_flags);
+    TEST_ASSERT_FALSE(st.status_measurement_incomplete);
+    TEST_ASSERT_TRUE(st.status_avg_not_filled);
+    TEST_ASSERT_FALSE(st.status_dir_fault);
+    TEST_ASSERT_EQUAL_UINT8(0x03, st.build_type);
+    TEST_ASSERT_EQUAL_UINT8(0x01, st.fw_version);
+    TEST_ASSERT_EQUAL_UINT16(12345, st.uptime_s);
+    TEST_ASSERT_EQUAL_UINT16(111, st.crc_error_count);
+    TEST_ASSERT_EQUAL_UINT16(222, st.served_request_count);
+}
+
+/* ── wind_build_type_name() (TDS FR-S32) ── */
+
+void test_wind_build_type_name_speed(void)
+{
+    TEST_ASSERT_EQUAL_STRING("wind_speed", wind_build_type_name(0x01));
+}
+
+void test_wind_build_type_name_direction(void)
+{
+    TEST_ASSERT_EQUAL_STRING("wind_direction", wind_build_type_name(0x02));
+}
+
+void test_wind_build_type_name_combined(void)
+{
+    TEST_ASSERT_EQUAL_STRING("wind_combined", wind_build_type_name(0x03));
+}
+
+void test_wind_build_type_name_unknown_zero(void)
+{
+    TEST_ASSERT_EQUAL_STRING("unknown", wind_build_type_name(0x00));
+}
+
+void test_wind_build_type_name_unknown_max(void)
+{
+    TEST_ASSERT_EQUAL_STRING("unknown", wind_build_type_name(0xFF));
+}
+
 int main(int /*argc*/, char ** /*argv*/)
 {
     UNITY_BEGIN();
@@ -294,5 +471,21 @@ int main(int /*argc*/, char ** /*argv*/)
     RUN_TEST(test_config_field_decode_round_trip);
     RUN_TEST(test_interval_elapsed_false_before_interval);
     RUN_TEST(test_interval_elapsed_true_at_or_after_interval);
+    RUN_TEST(test_wind_interface_decode_all_clear_status);
+    RUN_TEST(test_wind_interface_decode_measurement_incomplete_bit_only);
+    RUN_TEST(test_wind_interface_decode_avg_not_filled_bit_only);
+    RUN_TEST(test_wind_interface_decode_dir_fault_bit_only);
+    RUN_TEST(test_wind_interface_decode_all_three_status_bits_set);
+    RUN_TEST(test_wind_interface_decode_unrelated_bit_does_not_leak_into_bools);
+    RUN_TEST(test_wind_interface_decode_identification_known_combined_value);
+    RUN_TEST(test_wind_interface_decode_identification_fw_version_only_nonzero);
+    RUN_TEST(test_wind_interface_decode_identification_build_type_only_nonzero);
+    RUN_TEST(test_wind_interface_decode_diagnostic_counters_pass_through_unscaled);
+    RUN_TEST(test_wind_interface_decode_reads_only_its_own_window_when_passed_pointer_into_larger_buffer);
+    RUN_TEST(test_wind_build_type_name_speed);
+    RUN_TEST(test_wind_build_type_name_direction);
+    RUN_TEST(test_wind_build_type_name_combined);
+    RUN_TEST(test_wind_build_type_name_unknown_zero);
+    RUN_TEST(test_wind_build_type_name_unknown_max);
     return UNITY_END();
 }

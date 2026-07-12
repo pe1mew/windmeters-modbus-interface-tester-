@@ -96,6 +96,7 @@ reports the converted raw address, not the Modicon number you sent.
 | `POST /api/v1/scan` | Bus scan — `{"start":1,"end":247,"wait":true}` blocks until the full sweep completes and returns every address found; `"wait":false` returns immediately and you poll `GET /api/v1/scan` for progress |
 | `GET /api/v1/log?n=20` | The last `n` (max 50) TX/RX frames from the traffic log |
 | `GET /api/v1/wind?type=speed` (or `type=direction`) | The wind poller's last cached reading for that sensor type — cheaper than re-reading the bus yourself, since it reuses whatever the tester is already polling |
+| `GET /api/v1/interface?slave=30` | Live read of the DUT's device/system diagnostic registers (identity + the DUT's own bus-health counters, TDS §2.7) — unlike the wind reading above, this always re-reads the bus rather than using a cache, since there's no poll-slot contention to avoid |
 
 ### A typical session
 

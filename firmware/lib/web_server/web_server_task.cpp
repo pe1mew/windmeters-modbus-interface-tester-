@@ -280,6 +280,38 @@ static void broadcast_wind_if_active(void)
 }
 
 /**
+ * @brief Forward declaration — wind_default_addr() is defined further down
+ * (near register_wind_endpoints()), but broadcast_interface_if_active()
+ * below needs it here to resolve the active poll's target address the same
+ * way GET /api/v1/wind does (wind_default_addr(wind_poll_get_active_type())),
+ * since wind_poll_task exposes no dedicated "get active target address"
+ * accessor of its own.
+ */
+static uint8_t wind_default_addr(wind_sensor_type_t type);
+
+/**
+ * @brief Push the WebSocket `type:"interface"` payload — the device/system
+ * diagnostic registers (TDS §2.7) read opportunistically alongside
+ * whichever sensor type wind_poll_task currently has active. Identical on
+ * every build (FR-MB27), so unlike broadcast_wind_if_active() there's no
+ * per-type branching here — just whether a poll is active AND has produced
+ * at least one successful reading yet (wind_poll_is_active() alone isn't
+ * enough: before the first successful poll, s_latest_iface is still
+ * all-zero). A no-op in either case.
+ */
+static void broadcast_interface_if_active(void)
+{
+    if (!wind_poll_is_active() || !wind_poll_has_data()) {
+        return;
+    }
+    wind_interface_status_t st = wind_poll_get_latest_interface();
+    uint8_t addr = wind_default_addr(wind_poll_get_active_type());
+    char json[400]; /* generous headroom past the ~330-byte worst-case payload, not an exact fit */
+    web_core_build_interface_json(json, sizeof(json), addr, &st, /*has_data=*/true, wind_poll_age_ms());
+    s_ws.textAll(json);
+}
+
+/**
  * @brief Push one WebSocket `type:"log"` payload for a single TX or RX traffic-log entry.
  * @param entry Log entry to broadcast; its raw bytes are hex-encoded and its timestamp reformatted to HH:MM:SS for the GUI table (see the `ts_buf` comment below for why this differs from /api/v1/log's own timestamp contract).
  */
@@ -349,12 +381,14 @@ static void broadcast_new_log_entries(void)
  *
  * Runs every STATUS_BROADCAST_INTERVAL_MS (1000 ms), unconditionally, for
  * the life of the device. Each tick: broadcast_status() always fires;
- * broadcast_scan_if_active() and broadcast_wind_if_active() only push a
- * payload when a scan/wind-poll is actually running, so idle clients don't
- * get spammed with empty results; broadcast_new_log_entries() pushes
- * whatever traffic-log entries appeared since the previous tick, which may
- * be zero, one, or several (a TX+RX pair from one transaction, or a burst
- * from a fast poll). All four fire from a single 1 Hz cadence — there is no
+ * broadcast_scan_if_active(), broadcast_wind_if_active(), and
+ * broadcast_interface_if_active() only push a payload when a scan/wind-poll
+ * is actually running (broadcast_interface_if_active() additionally waits
+ * for that poll's first successful reading), so idle clients don't get
+ * spammed with empty results; broadcast_new_log_entries() pushes whatever
+ * traffic-log entries appeared since the previous tick, which may be zero,
+ * one, or several (a TX+RX pair from one transaction, or a burst from a
+ * fast poll). All five fire from a single 1 Hz cadence — there is no
  * separate faster/slower channel for any one payload type.
  */
 static void broadcast_task_fn(void * /*pvParameters*/)
@@ -363,6 +397,7 @@ static void broadcast_task_fn(void * /*pvParameters*/)
         broadcast_status();
         broadcast_scan_if_active();
         broadcast_wind_if_active();
+        broadcast_interface_if_active();
         broadcast_new_log_entries();
         vTaskDelay(pdMS_TO_TICKS(STATUS_BROADCAST_INTERVAL_MS));
     }
@@ -503,6 +538,29 @@ static void register_wind_endpoints(void)
 
         bool ok = known && wind_poll_write_config_field(addr, field, value);
         send_ok(request, ok);
+    }));
+
+    // POST /wind/interface/read — read the device/system diagnostic registers (TDS §2.7, raw 0x0005-0x0009), identical on every build, from a wind unit and report them as a JSON object.
+    s_server.addHandler(new AsyncCallbackJsonWebHandler("/wind/interface/read", [](AsyncWebServerRequest *request, JsonVariant &json) {
+        JsonObject o = json.as<JsonObject>();
+        uint8_t addr = o["addr"] | cfg_get_u8(CFG_KEY_WIND_INTERFACE_ADDR, CFG_DEFAULT_WIND_INTERFACE_ADDR);
+        wind_interface_status_t st;
+        bool ok = wind_poll_read_interface(addr, &st);
+
+        if (ok) {
+            /* web_core_build_interface_json()'s own output always starts
+             * with '{' — splice "ok":true onto the front for this
+             * HTTP-specific response by skipping that leading brace.
+             * Generous headroom past the ~330-byte worst-case payload, not
+             * an exact fit (this file's own buffer-sizing convention). */
+            char inner_buf[400];
+            web_core_build_interface_json(inner_buf, sizeof(inner_buf), addr, &st, /*has_data=*/true, /*age_ms=*/0);
+            char final_buf[440];
+            snprintf(final_buf, sizeof(final_buf), "{\"ok\":true,%s", inner_buf + 1);
+            request->send(200, "application/json", final_buf);
+        } else {
+            request->send(200, "application/json", "{\"ok\":false}");
+        }
     }));
 }
 
@@ -833,6 +891,36 @@ static void register_api_v1_endpoints(void)
         web_core_build_api_wind_json(buf, sizeof(buf), wind_default_addr(type), type,
             this_type_active, &reading, wind_poll_has_data(), wind_poll_age_ms());
         request->send(200, "application/json", buf);
+    });
+
+    // GET /api/v1/interface?slave=<addr> — live FC04 read of the device/system diagnostic registers (TDS §2.7, raw 0x0005-0x0009) from any wind unit. Unlike GET /api/v1/wind above, this always issues a fresh bus read rather than reading a cache — there's no poll-slot contention risk to avoid, since wind_poll_read_interface() is independent of the single-active-poll state machine. "slave" defaults to the Wind Interface tab's stored address (CFG_KEY_WIND_INTERFACE_ADDR) when omitted or out of range.
+    s_server.on("/api/v1/interface", HTTP_GET, [](AsyncWebServerRequest *request) {
+        uint8_t addr = cfg_get_u8(CFG_KEY_WIND_INTERFACE_ADDR, CFG_DEFAULT_WIND_INTERFACE_ADDR);
+        if (request->hasParam("slave")) {
+            long parsed = request->getParam("slave")->value().toInt();
+            if (parsed >= 1 && parsed <= 247) {
+                addr = (uint8_t)parsed;
+            }
+        }
+
+        wind_interface_status_t st;
+        bool ok = wind_poll_read_interface(addr, &st);
+
+        if (ok) {
+            /* Same "ok":true splice technique as POST /wind/interface/read,
+             * with "target" added the way GET /api/v1/wind's own response
+             * carries one — machine-API parity naming for "which address
+             * this read was against". */
+            char inner_buf[400];
+            web_core_build_interface_json(inner_buf, sizeof(inner_buf), addr, &st, /*has_data=*/true, /*age_ms=*/0);
+            char final_buf[460];
+            snprintf(final_buf, sizeof(final_buf), "{\"ok\":true,\"target\":%u,%s", addr, inner_buf + 1);
+            request->send(200, "application/json", final_buf);
+        } else {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "{\"ok\":false,\"target\":%u}", addr);
+            request->send(200, "application/json", buf);
+        }
     });
 
     // GET /api/v1/log?n=20 — most recent n TX/RX traffic-log entries (§5.4, default 20, clamped to MB_LOG_CAPACITY), newest last, for post-hoc debugging of what actually went over the wire.

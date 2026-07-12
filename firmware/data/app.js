@@ -27,6 +27,7 @@ function wsConnect() {
       if      (msg.type === 'status')    handleStatus(msg);
       else if (msg.type === 'scan')      handleScan(msg);
       else if (msg.type === 'wind')      handleWind(msg);
+      else if (msg.type === 'interface') handleInterface(msg);
       else if (msg.type === 'log')       appendLog(msg);
       else if (msg.type === 'log_clear') clearLogTable();
     } catch (_) {}
@@ -277,6 +278,48 @@ function postWindConfigWrite(type, field) {
   post('/wind/config/write', { type, addr, field, value }).then(r => {
     if (statusEl) statusEl.textContent = (r && r.ok) ? ('Wrote ' + field + ' OK.') : ('Write of ' + field + ' failed.');
   });
+}
+
+// ── Wind Interface ────────────────────────────────────────────────────────
+// Device/system diagnostic registers (TDS §2.7, raw 0x0005-0x0009) — read
+// on demand via POST /wind/interface/read, and pushed opportunistically over
+// the WebSocket (type:"interface") whenever a Wind Speed/Direction/Combined
+// poll is active, since wind_poll_task decodes this block as a side effect
+// of every successful poll (wind_poll_get_latest_interface()). Owns no poll
+// slot of its own — no Start/Stop, no WIND_PREFIXES/setWindButtons() wiring.
+function postInterfaceRead() {
+  const addr     = parseInt(document.getElementById('wiface-addr').value, 10);
+  const statusEl = document.getElementById('wiface-read-status');
+  post('/wind/interface/read', { addr }).then(r => {
+    if (!r || !r.ok) {
+      if (statusEl) statusEl.textContent = 'Read failed.';
+      return;
+    }
+    handleInterface(r);
+    if (statusEl) statusEl.textContent = 'Read OK.';
+  });
+}
+
+function handleInterface(m) {
+  setText('wiface-build',     m.build_name !== undefined ? m.build_name : '—');
+  setText('wiface-buildcode', m.build_type !== undefined
+    ? ('0x' + m.build_type.toString(16).padStart(2, '0').toUpperCase()) : '—');
+  setText('wiface-fw',        m.fw_version !== undefined ? m.fw_version : '—');
+  setText('wiface-status-raw', m.status_flags !== undefined
+    ? ('0x' + m.status_flags.toString(16).padStart(4, '0').toUpperCase()) : '—');
+
+  setText('wiface-st-meas', m.status_measurement_incomplete === undefined ? '—'
+    : (m.status_measurement_incomplete ? 'Incomplete' : 'OK'));
+  setText('wiface-st-avg',  m.status_avg_not_filled === undefined ? '—'
+    : (m.status_avg_not_filled ? 'Not filled' : 'OK'));
+
+  const faultEl = document.getElementById('wiface-fault');
+  if (faultEl) faultEl.style.display = m.status_dir_fault ? 'inline-block' : 'none';
+
+  setText('wiface-uptime', m.uptime_s !== undefined ? fmtElapsed(m.uptime_s) : '—');
+  setText('wiface-crc',    m.crc_error_count      !== undefined ? m.crc_error_count      : '—');
+  setText('wiface-served', m.served_request_count !== undefined ? m.served_request_count : '—');
+  setText('wiface-age',    m.age_ms               !== undefined ? m.age_ms               : '—');
 }
 
 // ── Register Explorer ───────────────────────────────────────────────────

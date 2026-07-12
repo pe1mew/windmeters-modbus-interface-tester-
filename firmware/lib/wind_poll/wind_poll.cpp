@@ -33,6 +33,27 @@ void wind_poll_decode(wind_sensor_type_t type, const uint16_t raw_registers[13],
     out->dir_raw_adc         = (type == WIND_SENSOR_COMBINED) ? raw_registers[12] : 0u;
 }
 
+void wind_interface_decode(const uint16_t status_block[5], wind_interface_status_t *out)
+{
+    out->status_flags                  = status_block[0];
+    out->status_measurement_incomplete = (status_block[0] & WIND_STATUS_MEASUREMENT_INCOMPLETE) != 0;
+    out->status_avg_not_filled         = (status_block[0] & WIND_STATUS_AVG_NOT_FILLED) != 0;
+    out->status_dir_fault              = (status_block[0] & WIND_STATUS_DIR_FAULT) != 0;
+    out->build_type                    = (uint8_t)(status_block[1] >> 8);
+    out->fw_version                    = (uint8_t)(status_block[1] & 0xFF);
+    out->uptime_s                      = status_block[2];
+    out->crc_error_count               = status_block[3];
+    out->served_request_count          = status_block[4];
+}
+
+const char *wind_build_type_name(uint8_t build_type)
+{
+    if (build_type == 0x01) return "wind_speed";
+    if (build_type == 0x02) return "wind_direction";
+    if (build_type == 0x03) return "wind_combined";
+    return "unknown";
+}
+
 uint16_t wind_config_field_register(wind_config_field_t field)
 {
     switch (field) {

@@ -152,6 +152,30 @@ int web_core_build_wind_json(char *out, size_t out_size, wind_sensor_type_t type
         (unsigned)reading->dir_raw_adc, (unsigned)age_ms);
 }
 
+int web_core_build_interface_json(char *out, size_t out_size, uint8_t addr,
+                                   const wind_interface_status_t *st,
+                                   bool has_data, uint32_t age_ms)
+{
+    if (!has_data) {
+        return snprintf(out, out_size, "{\"type\":\"interface\",\"addr\":%u,\"has_data\":false}", addr);
+    }
+    return snprintf(out, out_size,
+        "{\"type\":\"interface\",\"addr\":%u,"
+        "\"build_type\":%u,\"build_name\":\"%s\","
+        "\"fw_version\":%u,"
+        "\"status_flags\":%u,"
+        "\"status_measurement_incomplete\":%s,\"status_avg_not_filled\":%s,\"status_dir_fault\":%s,"
+        "\"uptime_s\":%u,\"crc_error_count\":%u,\"served_request_count\":%u,"
+        "\"has_data\":true,\"age_ms\":%u}",
+        addr, st->build_type, wind_build_type_name(st->build_type), st->fw_version,
+        (unsigned)st->status_flags,
+        st->status_measurement_incomplete ? "true" : "false",
+        st->status_avg_not_filled ? "true" : "false",
+        st->status_dir_fault ? "true" : "false",
+        (unsigned)st->uptime_s, (unsigned)st->crc_error_count, (unsigned)st->served_request_count,
+        (unsigned)age_ms);
+}
+
 int web_core_build_status_json(char *out, size_t out_size,
                                 const char *fw_version,
                                 const char *wifi_mode, const char *wifi_ssid,
