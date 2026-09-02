@@ -42,12 +42,29 @@
  * mb_master.h expects to already exist). Task start order among
  * independent tasks is otherwise arbitrary — FreeRTOS scheduling, not this
  * function, decides what runs when.
+ *
+ * The diagnostic `Serial.println()` calls run last, after every task has
+ * started, not first — see the `setTxTimeoutMs()` comment inline below for
+ * why: they used to run first and could block the entire function forever
+ * with no USB host attached. Don't move a print above the task-start block
+ * without re-reading that comment.
  */
 void setup()
 {
     Serial.begin(115200);
-    delay(2000); /* let native USB-CDC enumerate before the first log line */
-    Serial.println("Windmeters Modbus Interface Tester starting...");
+    /* This board's native USB-CDC ("Hardware CDC and JTAG" mode, see
+     * platformio.ini) blocks Serial writes until a USB host actually
+     * enumerates and reads them — unlike a UART-to-USB bridge chip, which
+     * just sends bytes whether or not anything's listening. Powered only
+     * via the Atomic RS485 Base (no USB host ever attached), that first
+     * blocking write used to hang forever, and since it ran before every
+     * *_task_start() call below, WiFi (and everything else) never started
+     * — the symptom looked like "WiFi needs USB" but was really "setup()
+     * itself never gets past its first log line without USB". Fixed here
+     * (0 = never block) and by moving every print below the task starts,
+     * so the fix holds even if a write happens to still block. See
+     * memory/gotcha-log.md. */
+    Serial.setTxTimeoutMs(0);
 
     cfg_init(cfg_backend_preferences_init());
     led_init(led_backend_fastled_init());
@@ -65,6 +82,8 @@ void setup()
     wind_poll_task_start();
     web_server_task_start();
 
+    delay(2000); /* let native USB-CDC enumerate before these lines, if a host is attached — cosmetic only now: setTxTimeoutMs(0) above means they never block boot either way */
+    Serial.println("Windmeters Modbus Interface Tester starting...");
     Serial.println("Ready — open the web UI (AP: http://192.168.4.1, or STA/mDNS once connected).");
 }
 

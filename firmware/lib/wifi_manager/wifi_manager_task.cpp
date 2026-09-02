@@ -145,6 +145,16 @@ static void wifi_manager_task_fn(void * /*pvParameters*/)
     /* AP starts unconditionally, before anything about credentials is
      * checked — see wifi_manager.h's header comment for why. */
     WiFi.mode(WIFI_MODE_APSTA);
+    /* Confirmed on hardware (memory/gotcha-log.md): powered from the
+     * Atomic RS485 Base alone (no USB), the board brownout-resets around
+     * here — esp_reset_reason() on the next boot reported ESP_RST_BROWNOUT.
+     * Lowest available TX power, as a mitigation attempt: setTxPower()
+     * only takes effect once STA/AP has actually started (Arduino core
+     * requirement), i.e. after WiFi.mode() above already did the radio's
+     * own power-up — so this cannot lower whatever that power-up itself
+     * draws, only what any actual transmission after it draws. Left in
+     * pending a real Base-only-power retest. */
+    WiFi.setTxPower(WIFI_POWER_MINUS_1dBm);
     start_ap();
     strncpy(s_status.mode_str, "AP", sizeof(s_status.mode_str) - 1);
 

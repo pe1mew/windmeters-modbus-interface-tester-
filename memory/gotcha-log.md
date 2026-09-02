@@ -32,6 +32,39 @@ crash, just total silence on the serial monitor while the firmware is
 actually running fine. First thing to check if a freshly-flashed AtomS3
 sketch produces zero serial output.
 
+**Powered from the Atomic RS485 Base alone (no USB host attached), the
+board never brought up WiFi (or anything else) — root cause was a
+blocking `Serial.println()` in `setup()`, not WiFi or power at all.**
+This board runs the ESP32-S3's native USB-Serial-JTAG peripheral for
+`Serial` (`ARDUINO_USB_MODE=1` from the board manifest +
+`ARDUINO_USB_CDC_ON_BOOT=1`, `platformio.ini`) — unlike a UART-to-USB
+bridge chip, this peripheral blocks `write()` until a USB host actually
+enumerates and drains its internal buffer, governed by a `tx_timeout_ms`
+this project never used to override. `main.cpp`'s `setup()` used to print
+a boot banner via `Serial.println()` *before* any `*_task_start()` call —
+with the board powered only through the RS485 Base (no USB cable to a
+PC), that print blocked forever, and everything after it — including
+`wifi_manager_task_start()` — never ran. The symptom looked exactly like
+"WiFi needs USB to start," but WiFi was never the thing waiting; the
+entire rest of `setup()` was stuck behind one log line. Confirmed via
+Espressif's own `HWCDC.cpp`/`.h` and multiple `arduino-esp32` GitHub
+issues describing this exact blocking-without-a-host behavior (see
+`design/scratchbook.md` for links). Fixed two ways in `main.cpp`: (1)
+`Serial.setTxTimeoutMs(0)` right after `Serial.begin()` so writes never
+block regardless of what's attached, and (2) moved every `Serial.println`
+to run after all `*_task_start()` calls, so the fix holds even if a write
+somehow still blocked. Trade-off worth knowing: the boot banner is now
+genuinely fire-and-forget — a monitor that attaches even slightly after
+reset may simply never see "...starting..." (it already silently
+dropped), where before it would eventually have appeared once something
+attached. Verified: build succeeds (confirms `setTxTimeoutMs` exists on
+this pinned core, arduino-esp32 2.0.9) and a full reflash over USB still
+boots to a fully working state (WiFi STA + NTP sync + Modbus all
+operational via `/api/v1/status`) — the Base-only-power scenario this
+specifically targets still needs a physical test (flash over USB, then
+disconnect USB and power from the Base alone, confirm WiFi/AP still comes
+up), since that requires physically unplugging a cable.
+
 **UART loopback tests need an RX-buffer flush right after
 `Serial2.begin()`.** Observed a single stray glitch byte sitting in the RX
 buffer immediately after `begin()`, before any real data was sent — showed

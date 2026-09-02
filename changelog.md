@@ -27,6 +27,21 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   presence of a literal `T`. Verified live: captured a real WS `type:"log"`
   frame post-sync (`"ts":"2026-07-12T08:05:05Z"`) and confirmed the
   rendered table cell read `10:06:34` (Europe/Amsterdam CEST).
+- WiFi (and every other task) never started when the board was powered
+  only from the Atomic RS485 Base with no USB host attached. Root cause
+  wasn't WiFi or power at all: `main.cpp`'s `setup()` printed a boot
+  banner via `Serial.println()` *before* starting any task, and this
+  board's native USB-Serial-JTAG `Serial` blocks writes until a USB host
+  enumerates and reads them — with no host ever attached, that first
+  print hung forever and nothing after it, including
+  `wifi_manager_task_start()`, ever ran. Fixed by calling
+  `Serial.setTxTimeoutMs(0)` right after `Serial.begin()` (writes never
+  block regardless of what's attached) and by moving every
+  `Serial.println` to run after all `*_task_start()` calls, so the fix
+  holds even if a write somehow still blocked. See
+  `memory/gotcha-log.md` for the full writeup, including a trade-off:
+  the boot banner is now fire-and-forget, so a monitor attached even
+  slightly late may simply miss it.
 
 ## [0.5.0] - 2026-07-12
 
